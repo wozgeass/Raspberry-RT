@@ -81,7 +81,6 @@ config ARM64
 	select HAVE_PERF_REGS
 	select HAVE_PERF_USER_STACK_DUMP
 	select HAVE_RCU_TABLE_FREE
-	select HAVE_PREEMPT_LAZY
 	select HAVE_SYSCALL_TRACEPOINTS
 	select IOMMU_DMA if IOMMU_SUPPORT
 	select IRQ_DOMAIN
@@ -625,7 +624,7 @@ config XEN_DOM0
 
 config XEN
 	bool "Xen guest support on ARM64"
-	depends on ARM64 && OF && !PREEMPT_RT_FULL
+	depends on ARM64 && OF
 	select SWIOTLB_XEN
 	select PARAVIRT
 	help
