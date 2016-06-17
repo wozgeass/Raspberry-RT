@@ -1414,12 +1414,10 @@ check_drain:
 				cc->migrate_pfn & ~((1UL << cc->order) - 1);
 
 			if (cc->last_migrated_pfn < current_block_start) {
-				cpu = get_cpu_light();
-				local_lock_irq(swapvec_lock);
+				cpu = get_cpu();
 				lru_add_drain_cpu(cpu);
-				local_unlock_irq(swapvec_lock);
 				drain_local_pages(zone);
-				put_cpu_light();
+				put_cpu();
 				/* No more flushing until we migrate again */
 				cc->last_migrated_pfn = 0;
 			}
@@ -1744,7 +1742,7 @@ static bool kcompactd_node_suitable(pg_data_t *pgdat)
 	struct zone *zone;
 	enum zone_type classzone_idx = pgdat->kcompactd_classzone_idx;
 
-	for (zoneid = 0; zoneid < classzone_idx; zoneid++) {
+	for (zoneid = 0; zoneid <= classzone_idx; zoneid++) {
 		zone = &pgdat->node_zones[zoneid];
 
 		if (!populated_zone(zone))
@@ -1779,7 +1777,7 @@ static void kcompactd_do_work(pg_data_t *pgdat)
 							cc.classzone_idx);
 	count_vm_event(KCOMPACTD_WAKE);
 
-	for (zoneid = 0; zoneid < cc.classzone_idx; zoneid++) {
+	for (zoneid = 0; zoneid <= cc.classzone_idx; zoneid++) {
 		int status;
 
 		zone = &pgdat->node_zones[zoneid];
