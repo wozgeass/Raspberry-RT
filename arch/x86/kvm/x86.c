@@ -3032,6 +3032,11 @@ static int kvm_vcpu_ioctl_x86_set_debugregs(struct kvm_vcpu *vcpu,
 	if (dbgregs->flags)
 		return -EINVAL;
 
+	if (dbgregs->dr6 & ~0xffffffffull)
+		return -EINVAL;
+	if (dbgregs->dr7 & ~0xffffffffull)
+		return -EINVAL;
+
 	memcpy(vcpu->arch.db, dbgregs->db, sizeof(vcpu->arch.db));
 	kvm_update_dr0123(vcpu);
 	vcpu->arch.dr6 = dbgregs->dr6;
@@ -5849,13 +5854,6 @@ int kvm_arch_init(void *opaque)
 		printk(KERN_ERR "kvm: failed to allocate percpu kvm_shared_msrs\n");
 		goto out;
 	}
-
-#ifdef CONFIG_PREEMPT_RT_FULL
-	if (!boot_cpu_has(X86_FEATURE_CONSTANT_TSC)) {
-		printk(KERN_ERR "RT requires X86_FEATURE_CONSTANT_TSC\n");
-		return -EOPNOTSUPP;
-	}
-#endif
 
 	r = kvm_mmu_module_init();
 	if (r)
