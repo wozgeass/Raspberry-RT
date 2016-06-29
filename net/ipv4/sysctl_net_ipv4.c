@@ -681,13 +681,6 @@ static struct ctl_table ipv4_net_table[] = {
 		.proc_handler	= proc_dointvec
 	},
 	{
-		.procname	= "icmp_echo_sysrq",
-		.data		= &init_net.ipv4.sysctl_icmp_echo_sysrq,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec
-	},
-	{
 		.procname	= "icmp_ignore_bogus_error_responses",
 		.data		= &init_net.ipv4.sysctl_icmp_ignore_bogus_error_responses,
 		.maxlen		= sizeof(int),
@@ -994,10 +987,6 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
 	net->ipv4.sysctl_local_reserved_ports = kzalloc(65536 / 8, GFP_KERNEL);
 	if (!net->ipv4.sysctl_local_reserved_ports)
 		goto err_ports;
-
-	net->ipv4.sysctl_ip_default_ttl = IPDEFTTL;
-	net->ipv4.sysctl_ip_dynaddr = 0;
-	net->ipv4.sysctl_ip_early_demux = 1;
 
 	return 0;
 
