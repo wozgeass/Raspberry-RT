@@ -19,7 +19,6 @@
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/fsnotify.h>
-#include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/hash.h>
@@ -579,7 +578,7 @@ static struct dentry *dentry_kill(struct dentry *dentry)
 
 failed:
 	spin_unlock(&dentry->d_lock);
-	cpu_chill();
+	cpu_relax();
 	return dentry; /* try again with same dentry */
 }
 
@@ -1620,7 +1619,7 @@ struct dentry *d_alloc(struct dentry * parent, const struct qstr *name)
 	struct dentry *dentry = __d_alloc(parent->d_sb, name);
 	if (!dentry)
 		return NULL;
-
+	dentry->d_flags |= DCACHE_RCUACCESS;
 	spin_lock(&parent->d_lock);
 	/*
 	 * don't need child lock because it is not subject
@@ -2317,7 +2316,7 @@ again:
 	if (dentry->d_lockref.count == 1) {
 		if (!spin_trylock(&inode->i_lock)) {
 			spin_unlock(&dentry->d_lock);
-			cpu_chill();
+			cpu_relax();
 			goto again;
 		}
 		dentry->d_flags &= ~DCACHE_CANT_MOUNT;
@@ -2339,7 +2338,6 @@ static void __d_rehash(struct dentry * entry, struct hlist_bl_head *b)
 {
 	BUG_ON(!d_unhashed(entry));
 	hlist_bl_lock(b);
-	entry->d_flags |= DCACHE_RCUACCESS;
 	hlist_bl_add_head_rcu(&entry->d_hash, b);
 	hlist_bl_unlock(b);
 }
@@ -2638,6 +2636,7 @@ static void __d_move(struct dentry *dentry, struct dentry *target,
 	/* ... and switch them in the tree */
 	if (IS_ROOT(dentry)) {
 		/* splicing a tree */
+		dentry->d_flags |= DCACHE_RCUACCESS;
 		dentry->d_parent = target->d_parent;
 		target->d_parent = target;
 		list_del_init(&target->d_child);
