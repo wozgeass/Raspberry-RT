@@ -1,32 +1,31 @@
 #!/bin/bash
 #
-# Multiqueue: Using pktgen threads for sending on multiple CPUs
-#  * adding devices to kernel threads
-#  * notice the naming scheme for keeping device names unique
-#  * nameing scheme: dev@thread_number
-#  * flow variation via random UDP source port
+# Benchmark script:
+#  - developed for benchmarking egress qdisc path, derived (more
+#    like cut'n'pasted) from ingress benchmark script.
+#
+# Script for injecting packets into egress qdisc path of the stack
+# with pktgen "xmit_mode queue_xmit".
 #
 basedir=`dirname $0`
 source ${basedir}/functions.sh
 root_check_run_with_sudo "$@"
-#
-# Required param: -i dev in $DEV
+
+# Parameter parsing via include
 source ${basedir}/parameters.sh
-
-# Base Config
-DELAY="0"        # Zero means max speed
-COUNT="100000"   # Zero means indefinitely
-[ -z "$CLONE_SKB" ] && CLONE_SKB="0"
-
-# Flow variation random source port between min and max
-UDP_MIN=9
-UDP_MAX=109
-
-# (example of setting default params in your script)
 if [ -z "$DEST_IP" ]; then
     [ -z "$IP6" ] && DEST_IP="198.18.0.42" || DEST_IP="FD00::1"
 fi
 [ -z "$DST_MAC" ] && DST_MAC="90:e2:ba:ff:ff:ff"
+
+# Burst greater than 1 are invalid for queue_xmit mode
+if [[ -n "$BURST" ]]; then
+    err 1 "Bursting not supported for this mode"
+fi
+
+# Base Config
+DELAY="0"        # Zero means max speed
+COUNT="10000000" # Zero means indefinitely
 
 # General cleanup everything since last run
 pg_ctrl "reset"
@@ -41,27 +40,19 @@ for ((thread = 0; thread < $THREADS; thread++)); do
     pg_thread $thread "rem_device_all"
     pg_thread $thread "add_device" $dev
 
-    # Notice config queue to map to cpu (mirrors smp_processor_id())
-    # It is beneficial to map IRQ /proc/irq/*/smp_affinity 1:1 to CPU number
-    pg_set $dev "flag QUEUE_MAP_CPU"
-
     # Base config of dev
+    pg_set $dev "flag QUEUE_MAP_CPU"
     pg_set $dev "count $COUNT"
-    pg_set $dev "clone_skb $CLONE_SKB"
     pg_set $dev "pkt_size $PKT_SIZE"
     pg_set $dev "delay $DELAY"
-
-    # Flag example disabling timestamping
     pg_set $dev "flag NO_TIMESTAMP"
 
     # Destination
     pg_set $dev "dst_mac $DST_MAC"
     pg_set $dev "dst$IP6 $DEST_IP"
 
-    # Setup random UDP port src range
-    pg_set $dev "flag UDPSRC_RND"
-    pg_set $dev "udp_src_min $UDP_MIN"
-    pg_set $dev "udp_src_max $UDP_MAX"
+    # Inject packet into TX qdisc egress path of stack
+    pg_set $dev "xmit_mode queue_xmit"
 done
 
 # start_run
