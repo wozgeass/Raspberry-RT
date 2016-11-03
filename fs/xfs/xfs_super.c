@@ -46,6 +46,7 @@
 #include "xfs_quota.h"
 #include "xfs_sysfs.h"
 #include "xfs_ondisk.h"
+#include "xfs_rmap_item.h"
 
 #include <linux/namei.h>
 #include <linux/init.h>
@@ -58,8 +59,7 @@
 #include <linux/parser.h>
 
 static const struct super_operations xfs_super_operations;
-static kmem_zone_t *xfs_ioend_zone;
-mempool_t *xfs_ioend_pool;
+struct bio_set *xfs_ioend_bioset;
 
 static struct kset *xfs_kset;		/* top-level xfs sysfs dir */
 #ifdef DEBUG
@@ -350,6 +350,7 @@ xfs_parseargs(
 		case Opt_pqnoenforce:
 			mp->m_qflags |= (XFS_PQUOTA_ACCT | XFS_PQUOTA_ACTIVE);
 			mp->m_qflags &= ~XFS_PQUOTA_ENFD;
+			break;
 		case Opt_gquota:
 		case Opt_grpquota:
 			mp->m_qflags |= (XFS_GQUOTA_ACCT | XFS_GQUOTA_ACTIVE |
@@ -546,7 +547,7 @@ xfs_showargs(
 
 	return 0;
 }
-__uint64_t
+static __uint64_t
 xfs_max_file_offset(
 	unsigned int		blockshift)
 {
@@ -1075,7 +1076,7 @@ xfs_fs_statfs(
 	statp->f_blocks = sbp->sb_dblocks - lsize;
 	spin_unlock(&mp->m_sb_lock);
 
-	statp->f_bfree = fdblocks - XFS_ALLOC_SET_ASIDE(mp);
+	statp->f_bfree = fdblocks - mp->m_alloc_set_aside;
 	statp->f_bavail = statp->f_bfree;
 
 	fakeinos = statp->f_bfree << sbp->sb_inopblog;
@@ -1294,6 +1295,7 @@ xfs_fs_remount(
 		 */
 		xfs_restore_resvblks(mp);
 		xfs_log_work_queue(mp);
+		xfs_queue_eofblocks(mp);
 	}
 
 	/* rw -> ro */
@@ -1306,6 +1308,13 @@ xfs_fs_remount(
 		 * return it to the same size.
 		 */
 		xfs_save_resvblks(mp);
+
+		/*
+		 * Cancel background eofb scanning so it cannot race with the
+		 * final log force+buftarg wait and deadlock the remount.
+		 */
+		cancel_delayed_work_sync(&mp->m_eofblocks_work);
+
 		xfs_quiesce_attr(mp);
 		mp->m_flags |= XFS_MOUNT_RDONLY;
 	}
@@ -1555,21 +1564,26 @@ xfs_fs_fill_super(
 
 	if (mp->m_flags & XFS_MOUNT_DAX) {
 		xfs_warn(mp,
-	"DAX enabled. Warning: EXPERIMENTAL, use at your own risk");
-		if (sb->s_blocksize != PAGE_SIZE) {
+		"DAX enabled. Warning: EXPERIMENTAL, use at your own risk");
+
+		error = bdev_dax_supported(sb, sb->s_blocksize);
+		if (error) {
 			xfs_alert(mp,
-		"Filesystem block size invalid for DAX Turning DAX off.");
-			mp->m_flags &= ~XFS_MOUNT_DAX;
-		} else if (!sb->s_bdev->bd_disk->fops->direct_access) {
-			xfs_alert(mp,
-		"Block device does not support DAX Turning DAX off.");
+			"DAX unsupported by block device. Turning off DAX.");
 			mp->m_flags &= ~XFS_MOUNT_DAX;
 		}
 	}
 
-	if (xfs_sb_version_hassparseinodes(&mp->m_sb))
+	if (xfs_sb_version_hasrmapbt(&mp->m_sb)) {
+		if (mp->m_sb.sb_rblocks) {
+			xfs_alert(mp,
+	"EXPERIMENTAL reverse mapping btree not compatible with realtime device!");
+			error = -EINVAL;
+			goto out_filestream_unmount;
+		}
 		xfs_alert(mp,
-	"EXPERIMENTAL sparse inode feature enabled. Use at your own risk!");
+	"EXPERIMENTAL reverse mapping btree feature enabled. Use at your own risk!");
+	}
 
 	error = xfs_mountfs(mp);
 	if (error)
@@ -1684,23 +1698,19 @@ MODULE_ALIAS_FS("xfs");
 STATIC int __init
 xfs_init_zones(void)
 {
-
-	xfs_ioend_zone = kmem_zone_init(sizeof(xfs_ioend_t), "xfs_ioend");
-	if (!xfs_ioend_zone)
+	xfs_ioend_bioset = bioset_create(4 * MAX_BUF_PER_PAGE,
+			offsetof(struct xfs_ioend, io_inline_bio));
+	if (!xfs_ioend_bioset)
 		goto out;
-
-	xfs_ioend_pool = mempool_create_slab_pool(4 * MAX_BUF_PER_PAGE,
-						  xfs_ioend_zone);
-	if (!xfs_ioend_pool)
-		goto out_destroy_ioend_zone;
 
 	xfs_log_ticket_zone = kmem_zone_init(sizeof(xlog_ticket_t),
 						"xfs_log_ticket");
 	if (!xfs_log_ticket_zone)
-		goto out_destroy_ioend_pool;
+		goto out_free_ioend_bioset;
 
-	xfs_bmap_free_item_zone = kmem_zone_init(sizeof(xfs_bmap_free_item_t),
-						"xfs_bmap_free_item");
+	xfs_bmap_free_item_zone = kmem_zone_init(
+			sizeof(struct xfs_extent_free_item),
+			"xfs_bmap_free_item");
 	if (!xfs_bmap_free_item_zone)
 		goto out_destroy_log_ticket_zone;
 
@@ -1767,8 +1777,24 @@ xfs_init_zones(void)
 	if (!xfs_icreate_zone)
 		goto out_destroy_ili_zone;
 
+	xfs_rud_zone = kmem_zone_init(sizeof(struct xfs_rud_log_item),
+			"xfs_rud_item");
+	if (!xfs_rud_zone)
+		goto out_destroy_icreate_zone;
+
+	xfs_rui_zone = kmem_zone_init((sizeof(struct xfs_rui_log_item) +
+			((XFS_RUI_MAX_FAST_EXTENTS - 1) *
+				sizeof(struct xfs_map_extent))),
+			"xfs_rui_item");
+	if (!xfs_rui_zone)
+		goto out_destroy_rud_zone;
+
 	return 0;
 
+ out_destroy_rud_zone:
+	kmem_zone_destroy(xfs_rud_zone);
+ out_destroy_icreate_zone:
+	kmem_zone_destroy(xfs_icreate_zone);
  out_destroy_ili_zone:
 	kmem_zone_destroy(xfs_ili_zone);
  out_destroy_inode_zone:
@@ -1793,10 +1819,8 @@ xfs_init_zones(void)
 	kmem_zone_destroy(xfs_bmap_free_item_zone);
  out_destroy_log_ticket_zone:
 	kmem_zone_destroy(xfs_log_ticket_zone);
- out_destroy_ioend_pool:
-	mempool_destroy(xfs_ioend_pool);
- out_destroy_ioend_zone:
-	kmem_zone_destroy(xfs_ioend_zone);
+ out_free_ioend_bioset:
+	bioset_free(xfs_ioend_bioset);
  out:
 	return -ENOMEM;
 }
@@ -1809,6 +1833,8 @@ xfs_destroy_zones(void)
 	 * destroy caches.
 	 */
 	rcu_barrier();
+	kmem_zone_destroy(xfs_rui_zone);
+	kmem_zone_destroy(xfs_rud_zone);
 	kmem_zone_destroy(xfs_icreate_zone);
 	kmem_zone_destroy(xfs_ili_zone);
 	kmem_zone_destroy(xfs_inode_zone);
@@ -1822,9 +1848,7 @@ xfs_destroy_zones(void)
 	kmem_zone_destroy(xfs_btree_cur_zone);
 	kmem_zone_destroy(xfs_bmap_free_item_zone);
 	kmem_zone_destroy(xfs_log_ticket_zone);
-	mempool_destroy(xfs_ioend_pool);
-	kmem_zone_destroy(xfs_ioend_zone);
-
+	bioset_free(xfs_ioend_bioset);
 }
 
 STATIC int __init
@@ -1859,6 +1883,9 @@ init_xfs_fs(void)
 
 	printk(KERN_INFO XFS_VERSION_STRING " with "
 			 XFS_BUILD_OPTIONS " enabled\n");
+
+	xfs_extent_free_init_defer_op();
+	xfs_rmap_update_init_defer_op();
 
 	xfs_dir_startup();
 

@@ -40,7 +40,6 @@
 #include <linux/ramfs.h>
 #include <linux/percpu-refcount.h>
 #include <linux/mount.h>
-#include <linux/swork.h>
 
 #include <asm/kmap_types.h>
 #include <asm/uaccess.h>
@@ -116,7 +115,7 @@ struct kioctx {
 	struct page		**ring_pages;
 	long			nr_pages;
 
-	struct swork_event	free_work;
+	struct work_struct	free_work;
 
 	/*
 	 * signals when all in-flight requests are done
@@ -240,7 +239,12 @@ static struct dentry *aio_mount(struct file_system_type *fs_type,
 	static const struct dentry_operations ops = {
 		.d_dname	= simple_dname,
 	};
-	return mount_pseudo(fs_type, "aio:", NULL, &ops, AIO_RING_MAGIC);
+	struct dentry *root = mount_pseudo(fs_type, "aio:", NULL, &ops,
+					   AIO_RING_MAGIC);
+
+	if (!IS_ERR(root))
+		root->d_sb->s_iflags |= SB_I_NOEXEC;
+	return root;
 }
 
 /* aio_setup
@@ -254,7 +258,6 @@ static int __init aio_setup(void)
 		.mount		= aio_mount,
 		.kill_sb	= kill_anon_super,
 	};
-	BUG_ON(swork_get());
 	aio_mnt = kern_mount(&aio_fs);
 	if (IS_ERR(aio_mnt))
 		panic("Failed to create aio fs mount.");
@@ -498,7 +501,12 @@ static int aio_setup_ring(struct kioctx *ctx)
 	ctx->mmap_size = nr_pages * PAGE_SIZE;
 	pr_debug("attempting mmap of %lu bytes\n", ctx->mmap_size);
 
-	down_write(&mm->mmap_sem);
+	if (down_write_killable(&mm->mmap_sem)) {
+		ctx->mmap_size = 0;
+		aio_free_ring(ctx);
+		return -EINTR;
+	}
+
 	ctx->mmap_base = do_mmap_pgoff(ctx->aio_ring_file, 0, ctx->mmap_size,
 				       PROT_READ | PROT_WRITE,
 				       MAP_SHARED, 0, &unused);
@@ -570,9 +578,9 @@ static int kiocb_cancel(struct aio_kiocb *kiocb)
 	return cancel(&kiocb->common);
 }
 
-static void free_ioctx(struct swork_event *sev)
+static void free_ioctx(struct work_struct *work)
 {
-	struct kioctx *ctx = container_of(sev, struct kioctx, free_work);
+	struct kioctx *ctx = container_of(work, struct kioctx, free_work);
 
 	pr_debug("freeing %p\n", ctx);
 
@@ -591,8 +599,8 @@ static void free_ioctx_reqs(struct percpu_ref *ref)
 	if (ctx->rq_wait && atomic_dec_and_test(&ctx->rq_wait->count))
 		complete(&ctx->rq_wait->comp);
 
-	INIT_SWORK(&ctx->free_work, free_ioctx);
-	swork_queue(&ctx->free_work);
+	INIT_WORK(&ctx->free_work, free_ioctx);
+	schedule_work(&ctx->free_work);
 }
 
 /*
@@ -600,9 +608,9 @@ static void free_ioctx_reqs(struct percpu_ref *ref)
  * and ctx->users has dropped to 0, so we know no more kiocbs can be submitted -
  * now it's safe to cancel any that need to be.
  */
-static void free_ioctx_users_work(struct swork_event *sev)
+static void free_ioctx_users(struct percpu_ref *ref)
 {
-	struct kioctx *ctx = container_of(sev, struct kioctx, free_work);
+	struct kioctx *ctx = container_of(ref, struct kioctx, users);
 	struct aio_kiocb *req;
 
 	spin_lock_irq(&ctx->ctx_lock);
@@ -619,14 +627,6 @@ static void free_ioctx_users_work(struct swork_event *sev)
 
 	percpu_ref_kill(&ctx->reqs);
 	percpu_ref_put(&ctx->reqs);
-}
-
-static void free_ioctx_users(struct percpu_ref *ref)
-{
-	struct kioctx *ctx = container_of(ref, struct kioctx, users);
-
-	INIT_SWORK(&ctx->free_work, free_ioctx_users_work);
-	swork_queue(&ctx->free_work);
 }
 
 static int ioctx_add_table(struct kioctx *ctx, struct mm_struct *mm)
@@ -1456,8 +1456,6 @@ rw_common:
 			kfree(iovec);
 			return ret;
 		}
-
-		len = ret;
 
 		if (rw == WRITE)
 			file_start_write(file);

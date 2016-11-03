@@ -92,13 +92,13 @@ static void ntfs_end_buffer_async_read(struct buffer_head *bh, int uptodate)
 			ofs = 0;
 			if (file_ofs < init_size)
 				ofs = init_size - file_ofs;
-			local_irq_save_nort(flags);
+			local_irq_save(flags);
 			kaddr = kmap_atomic(page);
 			memset(kaddr + bh_offset(bh) + ofs, 0,
 					bh->b_size - ofs);
 			flush_dcache_page(page);
 			kunmap_atomic(kaddr);
-			local_irq_restore_nort(flags);
+			local_irq_restore(flags);
 		}
 	} else {
 		clear_buffer_uptodate(bh);
@@ -107,7 +107,8 @@ static void ntfs_end_buffer_async_read(struct buffer_head *bh, int uptodate)
 				"0x%llx.", (unsigned long long)bh->b_blocknr);
 	}
 	first = page_buffers(page);
-	flags = bh_uptodate_lock_irqsave(first);
+	local_irq_save(flags);
+	bit_spin_lock(BH_Uptodate_Lock, &first->b_state);
 	clear_buffer_async_read(bh);
 	unlock_buffer(bh);
 	tmp = bh;
@@ -122,7 +123,8 @@ static void ntfs_end_buffer_async_read(struct buffer_head *bh, int uptodate)
 		}
 		tmp = tmp->b_this_page;
 	} while (tmp != bh);
-	bh_uptodate_unlock_irqrestore(first, flags);
+	bit_spin_unlock(BH_Uptodate_Lock, &first->b_state);
+	local_irq_restore(flags);
 	/*
 	 * If none of the buffers had errors then we can set the page uptodate,
 	 * but we first have to perform the post read mst fixups, if the
@@ -143,13 +145,13 @@ static void ntfs_end_buffer_async_read(struct buffer_head *bh, int uptodate)
 		recs = PAGE_SIZE / rec_size;
 		/* Should have been verified before we got here... */
 		BUG_ON(!recs);
-		local_irq_save_nort(flags);
+		local_irq_save(flags);
 		kaddr = kmap_atomic(page);
 		for (i = 0; i < recs; i++)
 			post_read_mst_fixup((NTFS_RECORD*)(kaddr +
 					i * rec_size), rec_size);
 		kunmap_atomic(kaddr);
-		local_irq_restore_nort(flags);
+		local_irq_restore(flags);
 		flush_dcache_page(page);
 		if (likely(page_uptodate && !PageError(page)))
 			SetPageUptodate(page);
@@ -157,7 +159,9 @@ static void ntfs_end_buffer_async_read(struct buffer_head *bh, int uptodate)
 	unlock_page(page);
 	return;
 still_busy:
-	bh_uptodate_unlock_irqrestore(first, flags);
+	bit_spin_unlock(BH_Uptodate_Lock, &first->b_state);
+	local_irq_restore(flags);
+	return;
 }
 
 /**
@@ -358,7 +362,7 @@ handle_zblock:
 		for (i = 0; i < nr; i++) {
 			tbh = arr[i];
 			if (likely(!buffer_uptodate(tbh)))
-				submit_bh(READ, tbh);
+				submit_bh(REQ_OP_READ, 0, tbh);
 			else
 				ntfs_end_buffer_async_read(tbh, 1);
 		}
@@ -873,7 +877,7 @@ lock_retry_remap:
 	do {
 		struct buffer_head *next = bh->b_this_page;
 		if (buffer_async_write(bh)) {
-			submit_bh(WRITE, bh);
+			submit_bh(REQ_OP_WRITE, 0, bh);
 			need_end_writeback = false;
 		}
 		bh = next;
@@ -1198,7 +1202,7 @@ lock_retry_remap:
 		BUG_ON(!buffer_mapped(tbh));
 		get_bh(tbh);
 		tbh->b_end_io = end_buffer_write_sync;
-		submit_bh(WRITE, tbh);
+		submit_bh(REQ_OP_WRITE, 0, tbh);
 	}
 	/* Synchronize the mft mirror now if not @sync. */
 	if (is_mft && !sync)

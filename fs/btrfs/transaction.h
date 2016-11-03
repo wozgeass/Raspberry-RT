@@ -128,6 +128,7 @@ struct btrfs_trans_handle {
 	 * Subvolume quota depends on this
 	 */
 	struct btrfs_root *root;
+	struct btrfs_fs_info *fs_info;
 	struct seq_list delayed_ref_elem;
 	struct list_head qgroup_ref_list;
 	struct list_head new_bgs;
@@ -144,7 +145,7 @@ struct btrfs_pending_snapshot {
 	/* block reservation for the operation */
 	struct btrfs_block_rsv block_rsv;
 	u64 qgroup_reserved;
-	/* extra metadata reseration for relocation */
+	/* extra metadata reservation for relocation */
 	int error;
 	bool readonly;
 	struct list_head list;

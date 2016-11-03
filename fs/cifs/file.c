@@ -271,7 +271,7 @@ struct cifsFileInfo *
 cifs_new_fileinfo(struct cifs_fid *fid, struct file *file,
 		  struct tcon_link *tlink, __u32 oplock)
 {
-	struct dentry *dentry = file->f_path.dentry;
+	struct dentry *dentry = file_dentry(file);
 	struct inode *inode = d_inode(dentry);
 	struct cifsInodeInfo *cinode = CIFS_I(inode);
 	struct cifsFileInfo *cfile;
@@ -305,6 +305,7 @@ cifs_new_fileinfo(struct cifs_fid *fid, struct file *file,
 	cfile->tlink = cifs_get_tlink(tlink);
 	INIT_WORK(&cfile->oplock_break, cifs_oplock_break);
 	mutex_init(&cfile->fh_mutex);
+	spin_lock_init(&cfile->file_info_lock);
 
 	cifs_sb_active(inode->i_sb);
 
@@ -317,7 +318,7 @@ cifs_new_fileinfo(struct cifs_fid *fid, struct file *file,
 		oplock = 0;
 	}
 
-	spin_lock(&cifs_file_list_lock);
+	spin_lock(&tcon->open_file_lock);
 	if (fid->pending_open->oplock != CIFS_OPLOCK_NO_CHANGE && oplock)
 		oplock = fid->pending_open->oplock;
 	list_del(&fid->pending_open->olist);
@@ -326,12 +327,13 @@ cifs_new_fileinfo(struct cifs_fid *fid, struct file *file,
 	server->ops->set_fid(cfile, fid, oplock);
 
 	list_add(&cfile->tlist, &tcon->openFileList);
+
 	/* if readable file instance put first in list*/
 	if (file->f_mode & FMODE_READ)
 		list_add(&cfile->flist, &cinode->openFileList);
 	else
 		list_add_tail(&cfile->flist, &cinode->openFileList);
-	spin_unlock(&cifs_file_list_lock);
+	spin_unlock(&tcon->open_file_lock);
 
 	if (fid->purge_cache)
 		cifs_zap_mapping(inode);
@@ -343,16 +345,16 @@ cifs_new_fileinfo(struct cifs_fid *fid, struct file *file,
 struct cifsFileInfo *
 cifsFileInfo_get(struct cifsFileInfo *cifs_file)
 {
-	spin_lock(&cifs_file_list_lock);
+	spin_lock(&cifs_file->file_info_lock);
 	cifsFileInfo_get_locked(cifs_file);
-	spin_unlock(&cifs_file_list_lock);
+	spin_unlock(&cifs_file->file_info_lock);
 	return cifs_file;
 }
 
 /*
  * Release a reference on the file private data. This may involve closing
  * the filehandle out on the server. Must be called without holding
- * cifs_file_list_lock.
+ * tcon->open_file_lock and cifs_file->file_info_lock.
  */
 void cifsFileInfo_put(struct cifsFileInfo *cifs_file)
 {
@@ -367,11 +369,15 @@ void cifsFileInfo_put(struct cifsFileInfo *cifs_file)
 	struct cifs_pending_open open;
 	bool oplock_break_cancelled;
 
-	spin_lock(&cifs_file_list_lock);
+	spin_lock(&tcon->open_file_lock);
+
+	spin_lock(&cifs_file->file_info_lock);
 	if (--cifs_file->count > 0) {
-		spin_unlock(&cifs_file_list_lock);
+		spin_unlock(&cifs_file->file_info_lock);
+		spin_unlock(&tcon->open_file_lock);
 		return;
 	}
+	spin_unlock(&cifs_file->file_info_lock);
 
 	if (server->ops->get_lease_key)
 		server->ops->get_lease_key(inode, &fid);
@@ -395,7 +401,8 @@ void cifsFileInfo_put(struct cifsFileInfo *cifs_file)
 			set_bit(CIFS_INO_INVALID_MAPPING, &cifsi->flags);
 		cifs_set_oplock_level(cifsi, 0);
 	}
-	spin_unlock(&cifs_file_list_lock);
+
+	spin_unlock(&tcon->open_file_lock);
 
 	oplock_break_cancelled = cancel_work_sync(&cifs_file->oplock_break);
 
@@ -461,7 +468,7 @@ int cifs_open(struct inode *inode, struct file *file)
 	tcon = tlink_tcon(tlink);
 	server = tcon->ses->server;
 
-	full_path = build_path_from_dentry(file->f_path.dentry);
+	full_path = build_path_from_dentry(file_dentry(file));
 	if (full_path == NULL) {
 		rc = -ENOMEM;
 		goto out;
@@ -772,10 +779,10 @@ int cifs_closedir(struct inode *inode, struct file *file)
 	server = tcon->ses->server;
 
 	cifs_dbg(FYI, "Freeing private data in close dir\n");
-	spin_lock(&cifs_file_list_lock);
+	spin_lock(&cfile->file_info_lock);
 	if (server->ops->dir_needs_close(cfile)) {
 		cfile->invalidHandle = true;
-		spin_unlock(&cifs_file_list_lock);
+		spin_unlock(&cfile->file_info_lock);
 		if (server->ops->close_dir)
 			rc = server->ops->close_dir(xid, tcon, &cfile->fid);
 		else
@@ -784,7 +791,7 @@ int cifs_closedir(struct inode *inode, struct file *file)
 		/* not much we can do if it fails anyway, ignore rc */
 		rc = 0;
 	} else
-		spin_unlock(&cifs_file_list_lock);
+		spin_unlock(&cfile->file_info_lock);
 
 	buf = cfile->srch_inf.ntwrk_buf_start;
 	if (buf) {
@@ -1112,6 +1119,12 @@ cifs_push_mandatory_locks(struct cifsFileInfo *cfile)
 	return rc;
 }
 
+static __u32
+hash_lockowner(fl_owner_t owner)
+{
+	return cifs_lock_secret ^ hash32_ptr((const void *)owner);
+}
+
 struct lock_to_push {
 	struct list_head llist;
 	__u64 offset;
@@ -1178,7 +1191,7 @@ cifs_push_posix_locks(struct cifsFileInfo *cfile)
 		else
 			type = CIFS_WRLCK;
 		lck = list_entry(el, struct lock_to_push, llist);
-		lck->pid = flock->fl_pid;
+		lck->pid = hash_lockowner(flock->fl_owner);
 		lck->netfid = cfile->fid.netfid;
 		lck->length = length;
 		lck->type = type;
@@ -1305,7 +1318,8 @@ cifs_getlk(struct file *file, struct file_lock *flock, __u32 type,
 			posix_lock_type = CIFS_RDLCK;
 		else
 			posix_lock_type = CIFS_WRLCK;
-		rc = CIFSSMBPosixLock(xid, tcon, netfid, current->tgid,
+		rc = CIFSSMBPosixLock(xid, tcon, netfid,
+				      hash_lockowner(flock->fl_owner),
 				      flock->fl_start, length, flock,
 				      posix_lock_type, wait_flag);
 		return rc;
@@ -1505,7 +1519,8 @@ cifs_setlk(struct file *file, struct file_lock *flock, __u32 type,
 			posix_lock_type = CIFS_UNLCK;
 
 		rc = CIFSSMBPosixLock(xid, tcon, cfile->fid.netfid,
-				      current->tgid, flock->fl_start, length,
+				      hash_lockowner(flock->fl_owner),
+				      flock->fl_start, length,
 				      NULL, posix_lock_type, wait_flag);
 		goto out;
 	}
@@ -1720,12 +1735,13 @@ struct cifsFileInfo *find_readable_file(struct cifsInodeInfo *cifs_inode,
 {
 	struct cifsFileInfo *open_file = NULL;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(cifs_inode->vfs_inode.i_sb);
+	struct cifs_tcon *tcon = cifs_sb_master_tcon(cifs_sb);
 
 	/* only filter by fsuid on multiuser mounts */
 	if (!(cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MULTIUSER))
 		fsuid_only = false;
 
-	spin_lock(&cifs_file_list_lock);
+	spin_lock(&tcon->open_file_lock);
 	/* we could simply get the first_list_entry since write-only entries
 	   are always at the end of the list but since the first entry might
 	   have a close pending, we go through the whole list */
@@ -1736,8 +1752,8 @@ struct cifsFileInfo *find_readable_file(struct cifsInodeInfo *cifs_inode,
 			if (!open_file->invalidHandle) {
 				/* found a good file */
 				/* lock it so it will not be closed on us */
-				cifsFileInfo_get_locked(open_file);
-				spin_unlock(&cifs_file_list_lock);
+				cifsFileInfo_get(open_file);
+				spin_unlock(&tcon->open_file_lock);
 				return open_file;
 			} /* else might as well continue, and look for
 			     another, or simply have the caller reopen it
@@ -1745,7 +1761,7 @@ struct cifsFileInfo *find_readable_file(struct cifsInodeInfo *cifs_inode,
 		} else /* write only file */
 			break; /* write only files are last so must be done */
 	}
-	spin_unlock(&cifs_file_list_lock);
+	spin_unlock(&tcon->open_file_lock);
 	return NULL;
 }
 
@@ -1754,6 +1770,7 @@ struct cifsFileInfo *find_writable_file(struct cifsInodeInfo *cifs_inode,
 {
 	struct cifsFileInfo *open_file, *inv_file = NULL;
 	struct cifs_sb_info *cifs_sb;
+	struct cifs_tcon *tcon;
 	bool any_available = false;
 	int rc;
 	unsigned int refind = 0;
@@ -1769,15 +1786,16 @@ struct cifsFileInfo *find_writable_file(struct cifsInodeInfo *cifs_inode,
 	}
 
 	cifs_sb = CIFS_SB(cifs_inode->vfs_inode.i_sb);
+	tcon = cifs_sb_master_tcon(cifs_sb);
 
 	/* only filter by fsuid on multiuser mounts */
 	if (!(cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MULTIUSER))
 		fsuid_only = false;
 
-	spin_lock(&cifs_file_list_lock);
+	spin_lock(&tcon->open_file_lock);
 refind_writable:
 	if (refind > MAX_REOPEN_ATT) {
-		spin_unlock(&cifs_file_list_lock);
+		spin_unlock(&tcon->open_file_lock);
 		return NULL;
 	}
 	list_for_each_entry(open_file, &cifs_inode->openFileList, flist) {
@@ -1788,8 +1806,8 @@ refind_writable:
 		if (OPEN_FMODE(open_file->f_flags) & FMODE_WRITE) {
 			if (!open_file->invalidHandle) {
 				/* found a good writable file */
-				cifsFileInfo_get_locked(open_file);
-				spin_unlock(&cifs_file_list_lock);
+				cifsFileInfo_get(open_file);
+				spin_unlock(&tcon->open_file_lock);
 				return open_file;
 			} else {
 				if (!inv_file)
@@ -1805,24 +1823,24 @@ refind_writable:
 
 	if (inv_file) {
 		any_available = false;
-		cifsFileInfo_get_locked(inv_file);
+		cifsFileInfo_get(inv_file);
 	}
 
-	spin_unlock(&cifs_file_list_lock);
+	spin_unlock(&tcon->open_file_lock);
 
 	if (inv_file) {
 		rc = cifs_reopen_file(inv_file, false);
 		if (!rc)
 			return inv_file;
 		else {
-			spin_lock(&cifs_file_list_lock);
+			spin_lock(&tcon->open_file_lock);
 			list_move_tail(&inv_file->flist,
 					&cifs_inode->openFileList);
-			spin_unlock(&cifs_file_list_lock);
+			spin_unlock(&tcon->open_file_lock);
 			cifsFileInfo_put(inv_file);
-			spin_lock(&cifs_file_list_lock);
 			++refind;
 			inv_file = NULL;
+			spin_lock(&tcon->open_file_lock);
 			goto refind_writable;
 		}
 	}
@@ -2687,11 +2705,8 @@ cifs_writev(struct kiocb *iocb, struct iov_iter *from)
 out:
 	inode_unlock(inode);
 
-	if (rc > 0) {
-		ssize_t err = generic_write_sync(file, iocb->ki_pos - rc, rc);
-		if (err < 0)
-			rc = err;
-	}
+	if (rc > 0)
+		rc = generic_write_sync(iocb, rc);
 	up_read(&cinode->lock_sem);
 	return rc;
 }
@@ -2855,39 +2870,31 @@ cifs_uncached_read_into_pages(struct TCP_Server_Info *server,
 	int result = 0;
 	unsigned int i;
 	unsigned int nr_pages = rdata->nr_pages;
-	struct kvec iov;
 
 	rdata->got_bytes = 0;
 	rdata->tailsz = PAGE_SIZE;
 	for (i = 0; i < nr_pages; i++) {
 		struct page *page = rdata->pages[i];
+		size_t n;
 
-		if (len >= PAGE_SIZE) {
-			/* enough data to fill the page */
-			iov.iov_base = kmap(page);
-			iov.iov_len = PAGE_SIZE;
-			cifs_dbg(FYI, "%u: iov_base=%p iov_len=%zu\n",
-				 i, iov.iov_base, iov.iov_len);
-			len -= PAGE_SIZE;
-		} else if (len > 0) {
-			/* enough for partial page, fill and zero the rest */
-			iov.iov_base = kmap(page);
-			iov.iov_len = len;
-			cifs_dbg(FYI, "%u: iov_base=%p iov_len=%zu\n",
-				 i, iov.iov_base, iov.iov_len);
-			memset(iov.iov_base + len, '\0', PAGE_SIZE - len);
-			rdata->tailsz = len;
-			len = 0;
-		} else {
+		if (len <= 0) {
 			/* no need to hold page hostage */
 			rdata->pages[i] = NULL;
 			rdata->nr_pages--;
 			put_page(page);
 			continue;
 		}
-
-		result = cifs_readv_from_socket(server, &iov, 1, iov.iov_len);
-		kunmap(page);
+		n = len;
+		if (len >= PAGE_SIZE) {
+			/* enough data to fill the page */
+			n = PAGE_SIZE;
+			len -= n;
+		} else {
+			zero_user(page, len, PAGE_SIZE - len);
+			rdata->tailsz = len;
+			len = 0;
+		}
+		result = cifs_read_page_from_socket(server, page, n);
 		if (result < 0)
 			break;
 
@@ -3303,7 +3310,6 @@ cifs_readpages_read_into_pages(struct TCP_Server_Info *server,
 	u64 eof;
 	pgoff_t eof_index;
 	unsigned int nr_pages = rdata->nr_pages;
-	struct kvec iov;
 
 	/* determine the eof that the server (probably) has */
 	eof = CIFS_I(rdata->mapping->host)->server_eof;
@@ -3314,23 +3320,14 @@ cifs_readpages_read_into_pages(struct TCP_Server_Info *server,
 	rdata->tailsz = PAGE_SIZE;
 	for (i = 0; i < nr_pages; i++) {
 		struct page *page = rdata->pages[i];
+		size_t n = PAGE_SIZE;
 
 		if (len >= PAGE_SIZE) {
-			/* enough data to fill the page */
-			iov.iov_base = kmap(page);
-			iov.iov_len = PAGE_SIZE;
-			cifs_dbg(FYI, "%u: idx=%lu iov_base=%p iov_len=%zu\n",
-				 i, page->index, iov.iov_base, iov.iov_len);
 			len -= PAGE_SIZE;
 		} else if (len > 0) {
 			/* enough for partial page, fill and zero the rest */
-			iov.iov_base = kmap(page);
-			iov.iov_len = len;
-			cifs_dbg(FYI, "%u: idx=%lu iov_base=%p iov_len=%zu\n",
-				 i, page->index, iov.iov_base, iov.iov_len);
-			memset(iov.iov_base + len,
-				'\0', PAGE_SIZE - len);
-			rdata->tailsz = len;
+			zero_user(page, len, PAGE_SIZE - len);
+			n = rdata->tailsz = len;
 			len = 0;
 		} else if (page->index > eof_index) {
 			/*
@@ -3360,8 +3357,7 @@ cifs_readpages_read_into_pages(struct TCP_Server_Info *server,
 			continue;
 		}
 
-		result = cifs_readv_from_socket(server, &iov, 1, iov.iov_len);
-		kunmap(page);
+		result = cifs_read_page_from_socket(server, page, n);
 		if (result < 0)
 			break;
 
@@ -3380,7 +3376,7 @@ readpages_get_pages(struct address_space *mapping, struct list_head *page_list,
 	struct page *page, *tpage;
 	unsigned int expected_index;
 	int rc;
-	gfp_t gfp = mapping_gfp_constraint(mapping, GFP_KERNEL);
+	gfp_t gfp = readahead_gfp_mask(mapping);
 
 	INIT_LIST_HEAD(tmplist);
 
@@ -3632,15 +3628,17 @@ static int cifs_readpage(struct file *file, struct page *page)
 static int is_inode_writable(struct cifsInodeInfo *cifs_inode)
 {
 	struct cifsFileInfo *open_file;
+	struct cifs_tcon *tcon =
+		cifs_sb_master_tcon(CIFS_SB(cifs_inode->vfs_inode.i_sb));
 
-	spin_lock(&cifs_file_list_lock);
+	spin_lock(&tcon->open_file_lock);
 	list_for_each_entry(open_file, &cifs_inode->openFileList, flist) {
 		if (OPEN_FMODE(open_file->f_flags) & FMODE_WRITE) {
-			spin_unlock(&cifs_file_list_lock);
+			spin_unlock(&tcon->open_file_lock);
 			return 1;
 		}
 	}
-	spin_unlock(&cifs_file_list_lock);
+	spin_unlock(&tcon->open_file_lock);
 	return 0;
 }
 
@@ -3854,7 +3852,7 @@ void cifs_oplock_break(struct work_struct *work)
  * Direct IO is not yet supported in the cached mode. 
  */
 static ssize_t
-cifs_direct_io(struct kiocb *iocb, struct iov_iter *iter, loff_t pos)
+cifs_direct_io(struct kiocb *iocb, struct iov_iter *iter)
 {
         /*
          * FIXME
