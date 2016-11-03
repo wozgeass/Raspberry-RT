@@ -2492,10 +2492,6 @@ static int create_loopback_mixing_ctl(struct hda_codec *codec)
 	if (!snd_hda_gen_add_kctl(spec, NULL, &loopback_mixing_enum))
 		return -ENOMEM;
 	spec->have_aamix_ctl = 1;
-	/* if no explicit aamix path is present (e.g. for Realtek codecs),
-	 * enable aamix as default -- just for compatibility
-	 */
-	spec->aamix_mode = !has_aamix_out_paths(spec);
 	return 0;
 }
 
@@ -5436,6 +5432,7 @@ static int dyn_adc_capture_pcm_prepare(struct hda_pcm_stream *hinfo,
 	spec->cur_adc_stream_tag = stream_tag;
 	spec->cur_adc_format = format;
 	snd_hda_codec_setup_stream(codec, spec->cur_adc, stream_tag, 0, format);
+	call_pcm_capture_hook(hinfo, codec, substream, HDA_GEN_PCM_ACT_PREPARE);
 	return 0;
 }
 
@@ -5446,6 +5443,7 @@ static int dyn_adc_capture_pcm_cleanup(struct hda_pcm_stream *hinfo,
 	struct hda_gen_spec *spec = codec->spec;
 	snd_hda_codec_cleanup_stream(codec, spec->cur_adc);
 	spec->cur_adc = 0;
+	call_pcm_capture_hook(hinfo, codec, substream, HDA_GEN_PCM_ACT_CLEANUP);
 	return 0;
 }
 

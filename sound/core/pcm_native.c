@@ -135,7 +135,7 @@ EXPORT_SYMBOL_GPL(snd_pcm_stream_unlock);
 void snd_pcm_stream_lock_irq(struct snd_pcm_substream *substream)
 {
 	if (!substream->pcm->nonatomic)
-		local_irq_disable_nort();
+		local_irq_disable();
 	snd_pcm_stream_lock(substream);
 }
 EXPORT_SYMBOL_GPL(snd_pcm_stream_lock_irq);
@@ -150,7 +150,7 @@ void snd_pcm_stream_unlock_irq(struct snd_pcm_substream *substream)
 {
 	snd_pcm_stream_unlock(substream);
 	if (!substream->pcm->nonatomic)
-		local_irq_enable_nort();
+		local_irq_enable();
 }
 EXPORT_SYMBOL_GPL(snd_pcm_stream_unlock_irq);
 
@@ -158,7 +158,7 @@ unsigned long _snd_pcm_stream_lock_irqsave(struct snd_pcm_substream *substream)
 {
 	unsigned long flags = 0;
 	if (!substream->pcm->nonatomic)
-		local_irq_save_nort(flags);
+		local_irq_save(flags);
 	snd_pcm_stream_lock(substream);
 	return flags;
 }
@@ -176,7 +176,7 @@ void snd_pcm_stream_unlock_irqrestore(struct snd_pcm_substream *substream,
 {
 	snd_pcm_stream_unlock(substream);
 	if (!substream->pcm->nonatomic)
-		local_irq_restore_nort(flags);
+		local_irq_restore(flags);
 }
 EXPORT_SYMBOL_GPL(snd_pcm_stream_unlock_irqrestore);
 
@@ -3161,7 +3161,7 @@ static unsigned int snd_pcm_playback_poll(struct file *file, poll_table * wait)
 
 	substream = pcm_file->substream;
 	if (PCM_RUNTIME_CHECK(substream))
-		return -ENXIO;
+		return POLLOUT | POLLWRNORM | POLLERR;
 	runtime = substream->runtime;
 
 	poll_wait(file, &runtime->sleep, wait);
@@ -3200,7 +3200,7 @@ static unsigned int snd_pcm_capture_poll(struct file *file, poll_table * wait)
 
 	substream = pcm_file->substream;
 	if (PCM_RUNTIME_CHECK(substream))
-		return -ENXIO;
+		return POLLIN | POLLRDNORM | POLLERR;
 	runtime = substream->runtime;
 
 	poll_wait(file, &runtime->sleep, wait);
