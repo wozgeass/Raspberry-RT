@@ -18,12 +18,11 @@ static inline void pm_set_vt_switch(int do_switch)
 #endif
 
 #ifdef CONFIG_VT_CONSOLE_SLEEP
-extern int pm_prepare_console(void);
+extern void pm_prepare_console(void);
 extern void pm_restore_console(void);
 #else
-static inline int pm_prepare_console(void)
+static inline void pm_prepare_console(void)
 {
-	return 0;
 }
 
 static inline void pm_restore_console(void)
@@ -193,12 +192,6 @@ struct platform_freeze_ops {
 	void (*restore)(void);
 	void (*end)(void);
 };
-
-#if defined(CONFIG_SUSPEND) || defined(CONFIG_HIBERNATION)
-extern bool pm_in_action;
-#else
-# define pm_in_action false
-#endif
 
 #ifdef CONFIG_SUSPEND
 /**

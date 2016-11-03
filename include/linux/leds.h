@@ -42,14 +42,16 @@ struct led_classdev {
 #define LED_UNREGISTERING	(1 << 1)
 	/* Upper 16 bits reflect control information */
 #define LED_CORE_SUSPENDRESUME	(1 << 16)
-#define LED_BLINK_ONESHOT	(1 << 17)
-#define LED_BLINK_ONESHOT_STOP	(1 << 18)
-#define LED_BLINK_INVERT	(1 << 19)
-#define LED_BLINK_BRIGHTNESS_CHANGE (1 << 20)
-#define LED_BLINK_DISABLE	(1 << 21)
-#define LED_SYSFS_DISABLE	(1 << 22)
-#define LED_DEV_CAP_FLASH	(1 << 23)
-#define LED_HW_PLUGGABLE	(1 << 24)
+#define LED_BLINK_SW		(1 << 17)
+#define LED_BLINK_ONESHOT	(1 << 18)
+#define LED_BLINK_ONESHOT_STOP	(1 << 19)
+#define LED_BLINK_INVERT	(1 << 20)
+#define LED_BLINK_BRIGHTNESS_CHANGE (1 << 21)
+#define LED_BLINK_DISABLE	(1 << 22)
+#define LED_SYSFS_DISABLE	(1 << 23)
+#define LED_DEV_CAP_FLASH	(1 << 24)
+#define LED_HW_PLUGGABLE	(1 << 25)
+#define LED_PANIC_INDICATOR	(1 << 26)
 	/* Additions for Raspberry Pi PWR LED */
 #define SET_GPIO_INPUT		(1 << 30)
 #define SET_GPIO_OUTPUT		(1 << 31)
@@ -74,8 +76,8 @@ struct led_classdev {
 	 * and if both are zero then a sensible default should be chosen.
 	 * The call should adjust the timings in that case and if it can't
 	 * match the values specified exactly.
-	 * Deactivate blinking again when the brightness is set to a fixed
-	 * value via the brightness_set() callback.
+	 * Deactivate blinking again when the brightness is set to LED_OFF
+	 * via the brightness_set() callback.
 	 */
 	int		(*blink_set)(struct led_classdev *led_cdev,
 				     unsigned long *delay_on,
@@ -326,10 +328,16 @@ static inline void *led_get_trigger_data(struct led_classdev *led_cdev)
 #endif /* CONFIG_LEDS_TRIGGERS */
 
 /* Trigger specific functions */
-#ifdef CONFIG_LEDS_TRIGGER_IDE_DISK
-extern void ledtrig_ide_activity(void);
+#ifdef CONFIG_LEDS_TRIGGER_DISK
+extern void ledtrig_disk_activity(void);
 #else
-static inline void ledtrig_ide_activity(void) {}
+static inline void ledtrig_disk_activity(void) {}
+#endif
+
+#ifdef CONFIG_LEDS_TRIGGER_MTD
+extern void ledtrig_mtd_activity(void);
+#else
+static inline void ledtrig_mtd_activity(void) {}
 #endif
 
 #if defined(CONFIG_LEDS_TRIGGER_CAMERA) || defined(CONFIG_LEDS_TRIGGER_CAMERA_MODULE)
@@ -361,6 +369,7 @@ struct gpio_led {
 	unsigned 	gpio;
 	unsigned	active_low : 1;
 	unsigned	retain_state_suspended : 1;
+	unsigned	panic_indicator : 1;
 	unsigned	default_state : 2;
 	/* default_state should be one of LEDS_GPIO_DEFSTATE_(ON|OFF|KEEP) */
 	struct gpio_desc *gpiod;
@@ -381,8 +390,16 @@ struct gpio_led_platform_data {
 					unsigned long *delay_off);
 };
 
+#ifdef CONFIG_NEW_LEDS
 struct platform_device *gpio_led_register_device(
 		int id, const struct gpio_led_platform_data *pdata);
+#else
+static inline struct platform_device *gpio_led_register_device(
+		int id, const struct gpio_led_platform_data *pdata)
+{
+	return 0;
+}
+#endif
 
 enum cpu_led_event {
 	CPU_LED_IDLE_START,	/* CPU enters idle */

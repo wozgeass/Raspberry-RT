@@ -8,7 +8,6 @@
 #include <linux/spinlock.h>
 #include <asm/current.h>
 #include <uapi/linux/wait.h>
-#include <linux/atomic.h>
 
 typedef struct __wait_queue wait_queue_t;
 typedef int (*wait_queue_func_t)(wait_queue_t *wait, unsigned mode, int flags, void *key);
@@ -598,6 +597,19 @@ do {									\
 	might_sleep();							\
 	if (!(condition))						\
 		__ret = __wait_event_interruptible_exclusive(wq, condition);\
+	__ret;								\
+})
+
+#define __wait_event_killable_exclusive(wq, condition)			\
+	___wait_event(wq, condition, TASK_KILLABLE, 1, 0,		\
+		      schedule())
+
+#define wait_event_killable_exclusive(wq, condition)			\
+({									\
+	int __ret = 0;							\
+	might_sleep();							\
+	if (!(condition))						\
+		__ret = __wait_event_killable_exclusive(wq, condition);	\
 	__ret;								\
 })
 

@@ -31,6 +31,7 @@
 
 #include <linux/kernel.h>
 #include <linux/stddef.h>
+#include <linux/rcupdate.h>
 
 struct rb_node {
 	unsigned long  __rb_parent_color;
@@ -75,6 +76,8 @@ extern struct rb_node *rb_next_postorder(const struct rb_node *);
 /* Fast replacement of a single node without remove/rebalance/add/rebalance */
 extern void rb_replace_node(struct rb_node *victim, struct rb_node *new,
 			    struct rb_root *root);
+extern void rb_replace_node_rcu(struct rb_node *victim, struct rb_node *new,
+				struct rb_root *root);
 
 static inline void rb_link_node(struct rb_node *node, struct rb_node *parent,
 				struct rb_node **rb_link)
@@ -85,8 +88,14 @@ static inline void rb_link_node(struct rb_node *node, struct rb_node *parent,
 	*rb_link = node;
 }
 
-void rb_link_node_rcu(struct rb_node *node, struct rb_node *parent,
-		      struct rb_node **rb_link);
+static inline void rb_link_node_rcu(struct rb_node *node, struct rb_node *parent,
+				    struct rb_node **rb_link)
+{
+	node->__rb_parent_color = (unsigned long)parent;
+	node->rb_left = node->rb_right = NULL;
+
+	rcu_assign_pointer(*rb_link, node);
+}
 
 #define rb_entry_safe(ptr, type, member) \
 	({ typeof(ptr) ____ptr = (ptr); \

@@ -75,49 +75,7 @@ struct buffer_head {
 	struct address_space *b_assoc_map;	/* mapping this buffer is
 						   associated with */
 	atomic_t b_count;		/* users using this buffer_head */
-#ifdef CONFIG_PREEMPT_RT_BASE
-	spinlock_t b_uptodate_lock;
-#if IS_ENABLED(CONFIG_JBD2)
-	spinlock_t b_state_lock;
-	spinlock_t b_journal_head_lock;
-#endif
-#endif
 };
-
-static inline unsigned long bh_uptodate_lock_irqsave(struct buffer_head *bh)
-{
-	unsigned long flags;
-
-#ifndef CONFIG_PREEMPT_RT_BASE
-	local_irq_save(flags);
-	bit_spin_lock(BH_Uptodate_Lock, &bh->b_state);
-#else
-	spin_lock_irqsave(&bh->b_uptodate_lock, flags);
-#endif
-	return flags;
-}
-
-static inline void
-bh_uptodate_unlock_irqrestore(struct buffer_head *bh, unsigned long flags)
-{
-#ifndef CONFIG_PREEMPT_RT_BASE
-	bit_spin_unlock(BH_Uptodate_Lock, &bh->b_state);
-	local_irq_restore(flags);
-#else
-	spin_unlock_irqrestore(&bh->b_uptodate_lock, flags);
-#endif
-}
-
-static inline void buffer_head_init_locks(struct buffer_head *bh)
-{
-#ifdef CONFIG_PREEMPT_RT_BASE
-	spin_lock_init(&bh->b_uptodate_lock);
-#if IS_ENABLED(CONFIG_JBD2)
-	spin_lock_init(&bh->b_state_lock);
-	spin_lock_init(&bh->b_journal_head_lock);
-#endif
-#endif
-}
 
 /*
  * macro tricks to expand the set_buffer_foo(), clear_buffer_foo()
@@ -229,12 +187,13 @@ struct buffer_head *alloc_buffer_head(gfp_t gfp_flags);
 void free_buffer_head(struct buffer_head * bh);
 void unlock_buffer(struct buffer_head *bh);
 void __lock_buffer(struct buffer_head *bh);
-void ll_rw_block(int, int, struct buffer_head * bh[]);
+void ll_rw_block(int, int, int, struct buffer_head * bh[]);
 int sync_dirty_buffer(struct buffer_head *bh);
-int __sync_dirty_buffer(struct buffer_head *bh, int rw);
-void write_dirty_buffer(struct buffer_head *bh, int rw);
-int _submit_bh(int rw, struct buffer_head *bh, unsigned long bio_flags);
-int submit_bh(int, struct buffer_head *);
+int __sync_dirty_buffer(struct buffer_head *bh, int op_flags);
+void write_dirty_buffer(struct buffer_head *bh, int op_flags);
+int _submit_bh(int op, int op_flags, struct buffer_head *bh,
+	       unsigned long bio_flags);
+int submit_bh(int, int, struct buffer_head *);
 void write_boundary_block(struct block_device *bdev,
 			sector_t bblock, unsigned blocksize);
 int bh_uptodate_or_lock(struct buffer_head *bh);
@@ -250,6 +209,9 @@ void block_invalidatepage(struct page *page, unsigned int offset,
 			  unsigned int length);
 int block_write_full_page(struct page *page, get_block_t *get_block,
 				struct writeback_control *wbc);
+int __block_write_full_page(struct inode *inode, struct page *page,
+			get_block_t *get_block, struct writeback_control *wbc,
+			bh_end_io_t *handler);
 int block_read_full_page(struct page*, get_block_t*);
 int block_is_partially_uptodate(struct page *page, unsigned long from,
 				unsigned long count);

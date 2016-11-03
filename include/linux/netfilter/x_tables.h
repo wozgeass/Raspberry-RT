@@ -4,8 +4,11 @@
 
 #include <linux/netdevice.h>
 #include <linux/static_key.h>
-#include <linux/locallock.h>
 #include <uapi/linux/netfilter/x_tables.h>
+
+/* Test a struct->invflags and a boolean for inequality */
+#define NF_INVF(ptr, flag, boolean)					\
+	((boolean) ^ !!((ptr)->invflags & (flag)))
 
 /**
  * struct xt_action_param - parameters for matches/targets
@@ -247,6 +250,10 @@ int xt_check_entry_offsets(const void *base, const char *elems,
 			   unsigned int target_offset,
 			   unsigned int next_offset);
 
+unsigned int *xt_alloc_entry_offsets(unsigned int size);
+bool xt_find_jump_offset(const unsigned int *offsets,
+			 unsigned int target, unsigned int size);
+
 int xt_check_match(struct xt_mtchk_param *, unsigned int size, u_int8_t proto,
 		   bool inv_proto);
 int xt_check_target(struct xt_tgchk_param *, unsigned int size, u_int8_t proto,
@@ -293,8 +300,6 @@ void xt_free_table_info(struct xt_table_info *info);
  */
 DECLARE_PER_CPU(seqcount_t, xt_recseq);
 
-DECLARE_LOCAL_IRQ_LOCK(xt_write_lock);
-
 /* xt_tee_enabled - true if x_tables needs to handle reentrancy
  *
  * Enabled if current ip(6)tables ruleset has at least one -j TEE rule.
@@ -314,9 +319,6 @@ extern struct static_key xt_tee_enabled;
 static inline unsigned int xt_write_recseq_begin(void)
 {
 	unsigned int addend;
-
-	/* RT protection */
-	local_lock(xt_write_lock);
 
 	/*
 	 * Low order bit of sequence is set if we already
@@ -348,7 +350,6 @@ static inline void xt_write_recseq_end(unsigned int addend)
 	/* this is kind of a write_seqcount_end(), but addend is 0 or 1 */
 	smp_wmb();
 	__this_cpu_add(xt_recseq.sequence, addend);
-	local_unlock(xt_write_lock);
 }
 
 /*
@@ -387,16 +388,16 @@ static inline unsigned long ifname_compare_aligned(const char *_a,
  * allows us to return 0 for single core systems without forcing
  * callers to deal with SMP vs. NONSMP issues.
  */
-static inline u64 xt_percpu_counter_alloc(void)
+static inline unsigned long xt_percpu_counter_alloc(void)
 {
 	if (nr_cpu_ids > 1) {
 		void __percpu *res = __alloc_percpu(sizeof(struct xt_counters),
 						    sizeof(struct xt_counters));
 
 		if (res == NULL)
-			return (u64) -ENOMEM;
+			return -ENOMEM;
 
-		return (u64) (__force unsigned long) res;
+		return (__force unsigned long) res;
 	}
 
 	return 0;
