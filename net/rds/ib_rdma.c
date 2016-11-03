@@ -34,8 +34,8 @@
 #include <linux/slab.h>
 #include <linux/rculist.h>
 #include <linux/llist.h>
-#include <linux/delay.h>
 
+#include "rds_single_path.h"
 #include "ib_mr.h"
 
 struct workqueue_struct *rds_ib_mr_wq;
@@ -210,7 +210,7 @@ static inline void wait_clean_list_grace(void)
 	for_each_online_cpu(cpu) {
 		flag = &per_cpu(clean_list_grace, cpu);
 		while (test_bit(CLEAN_LIST_BUSY_BIT, flag))
-			cpu_chill();
+			cpu_relax();
 	}
 }
 
@@ -619,7 +619,7 @@ struct rds_ib_mr_pool *rds_ib_create_mr_pool(struct rds_ib_device *rds_ibdev,
 
 int rds_ib_mr_init(void)
 {
-	rds_ib_mr_wq = create_workqueue("rds_mr_flushd");
+	rds_ib_mr_wq = alloc_workqueue("rds_mr_flushd", WQ_MEM_RECLAIM, 0);
 	if (!rds_ib_mr_wq)
 		return -ENOMEM;
 	return 0;
