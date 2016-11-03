@@ -35,6 +35,11 @@
 		brcm,pins = <18 19 20 21>;
 		brcm,function = <4>; /* alt0 */
 	};
+
+	audio_pins: audio_pins {
+		brcm,pins;
+		brcm,function;
+	};
 };
 
 &spi0 {
@@ -76,19 +81,17 @@
 };
 
 &i2s {
-	#sound-dai-cells = <0>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2s_pins>;
 };
 
-&random {
-	status = "okay";
+&hdmi {
+	hpd-gpios = <&gpio 46 GPIO_ACTIVE_HIGH>;
 };
 
 / {
 	__overrides__ {
 		uart0 = <&uart0>,"status";
-		uart0_clkrate = <&clk_uart0>,"clock-frequency:0";
 		uart1 = <&uart1>,"status";
 		i2s = <&i2s>,"status";
 		spi = <&spi0>,"status";

@@ -234,6 +234,8 @@ int __cpu_disable(void)
 	flush_cache_louis();
 	local_flush_tlb_all();
 
+	clear_tasks_mm_cpumask(cpu);
+
 	return 0;
 }
 
@@ -249,9 +251,6 @@ void __cpu_die(unsigned int cpu)
 		pr_err("CPU%u: cpu didn't die\n", cpu);
 		return;
 	}
-
-	clear_tasks_mm_cpumask(cpu);
-
 	pr_notice("CPU%u: shutdown\n", cpu);
 
 	/*
@@ -487,7 +486,7 @@ static const char *ipi_types[NR_IPI] __tracepoint_string = {
 
 static void smp_cross_call(const struct cpumask *target, unsigned int ipinr)
 {
-	trace_ipi_raise(target, ipi_types[ipinr]);
+	trace_ipi_raise_rcuidle(target, ipi_types[ipinr]);
 	__smp_cross_call(target, ipinr);
 }
 
@@ -645,9 +644,11 @@ void handle_IPI(int ipinr, struct pt_regs *regs)
 		break;
 
 	case IPI_CPU_BACKTRACE:
+		printk_nmi_enter();
 		irq_enter();
 		nmi_cpu_backtrace(regs);
 		irq_exit();
+		printk_nmi_exit();
 		break;
 
 	default:

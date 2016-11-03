@@ -30,7 +30,6 @@
 
 	.text
 
-#ifndef CONFIG_PREEMPT_RT_FULL
 _GLOBAL(call_do_softirq)
 	mflr	r0
 	std	r0,16(r1)
@@ -41,7 +40,6 @@ _GLOBAL(call_do_softirq)
 	ld	r0,16(r1)
 	mtlr	r0
 	blr
-#endif
 
 _GLOBAL(call_do_irq)
 	mflr	r0
@@ -663,13 +661,13 @@ _GLOBAL(kexec_sequence)
 
 #ifndef CONFIG_PPC_BOOK3E
 	/* clear out hardware hash page table and tlb */
-#if !defined(_CALL_ELF) || _CALL_ELF != 2
+#ifdef PPC64_ELF_ABI_v1
 	ld	r12,0(r27)		/* deref function descriptor */
 #else
 	mr	r12,r27
 #endif
 	mtctr	r12
-	bctrl				/* ppc_md.hpte_clear_all(void); */
+	bctrl				/* mmu_hash_ops.hpte_clear_all(void); */
 #endif /* !CONFIG_PPC_BOOK3E */
 
 /*

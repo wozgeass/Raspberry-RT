@@ -40,7 +40,6 @@
  * We store the saved ksp_limit in the unused part
  * of the STACK_FRAME_OVERHEAD
  */
-#ifndef CONFIG_PREEMPT_RT_FULL
 _GLOBAL(call_do_softirq)
 	mflr	r0
 	stw	r0,4(r1)
@@ -57,7 +56,6 @@ _GLOBAL(call_do_softirq)
 	stw	r10,THREAD+KSP_LIMIT(r2)
 	mtlr	r0
 	blr
-#endif
 
 /*
  * void call_do_irq(struct pt_regs *regs, struct thread_info *irqtp);
@@ -103,20 +101,6 @@ _GLOBAL(mulhdu)
 	addze	r10,r10
 2:	addc	r4,r4,r9
 	addze	r3,r10
-	blr
-
-/*
- * sub_reloc_offset(x) returns x - reloc_offset().
- */
-_GLOBAL(sub_reloc_offset)
-	mflr	r0
-	bl	1f
-1:	mflr	r5
-	lis	r4,1b@ha
-	addi	r4,r4,1b@l
-	subf	r5,r4,r5
-	subf	r3,r5,r3
-	mtlr	r0
 	blr
 
 /*
@@ -599,12 +583,6 @@ _GLOBAL(__bswapdi2)
 	rlwimi  r10,r3,24,16,23
 	mr      r3,r9
 	mr      r4,r10
-	blr
-
-_GLOBAL(abs)
-	srawi	r4,r3,31
-	xor	r3,r3,r4
-	sub	r3,r3,r4
 	blr
 
 #ifdef CONFIG_SMP

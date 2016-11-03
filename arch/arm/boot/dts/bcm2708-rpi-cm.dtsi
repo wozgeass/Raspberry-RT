@@ -23,9 +23,9 @@
 };
 
 
-&mmc {
+&sdhost {
 	pinctrl-names = "default";
-	pinctrl-0 = <&mmc_pins>;
+	pinctrl-0 = <&sdhost_pins>;
 	non-removable;
 	bus-width = <4>;
 	status = "okay";
@@ -38,8 +38,6 @@
 
 / {
 	__overrides__ {
-		core_freq = <&clk_core>,"clock-frequency:0";
-
 		act_led_gpio = <&act_led>,"gpios:4";
 		act_led_activelow = <&act_led>,"gpios:8";
 		act_led_trigger = <&act_led>,"linux,default-trigger";

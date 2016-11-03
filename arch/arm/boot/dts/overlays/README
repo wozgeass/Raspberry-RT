@@ -168,6 +168,28 @@ Load:   dtoverlay=adau1977-adc
 Params: <None>
 
 
+Name:   ads1015
+Info:   Overlay for activation of Texas Instruments ADS1015 ADC over I2C
+Load:   dtoverlay=ads1015,<param>=<val>
+Params: addr                    I2C bus address of device. Set based on how the
+                                addr pin is wired. (default=0x48 assumes addr
+                                is pulled to GND)
+        cha_enable              Enable virtual channel a. (default=true)
+        cha_cfg                 Set the configuration for virtual channel a.
+                                (default=4 configures this channel for the
+                                voltage at A0 with respect to GND)
+        cha_datarate            Set the datarate (samples/sec) for this channel.
+                                (default=4 sets 1600 sps)
+        cha_gain                Set the gain of the Programmable Gain
+                                Amplifier for this channel. (default=2 sets the
+                                full scale of the channel to 2.048 Volts)
+
+        Channel (ch) parameters can be set for each enabled channel.
+        A maximum of 4 channels can be enabled (letters a thru d).
+        For more information refer to the device datasheet at:
+        http://www.ti.com/lit/ds/symlink/ads1015.pdf
+
+
 Name:   ads7846
 Info:   ADS7846 Touch controller
 Load:   dtoverlay=ads7846,<param>=<val>
@@ -213,6 +235,26 @@ Params: 24db_digital_gain       Allow gain to be applied via the PCM512x codec
                                 that does not result in clipping/distortion!)
 
 
+Name:   allo-piano-dac-pcm512x-audio
+Info:   Configures the Allo Piano DAC (2.0/2.1) audio cards.
+        (NB. This initial support is for 2.0 channel audio ONLY! ie. stereo.
+        The subwoofer outputs on the Piano 2.1 are not currently supported!)
+Load:   dtoverlay=allo-piano-dac-pcm512x-audio,<param>
+Params: 24db_digital_gain       Allow gain to be applied via the PCM512x codec
+                                Digital volume control.
+                                (The default behaviour is that the Digital
+                                volume control is limited to a maximum of
+                                0dB. ie. it can attenuate but not provide
+                                gain. For most users, this will be desired
+                                as it will prevent clipping. By appending
+                                the 24db_digital_gain parameter, the Digital
+                                volume control will allow up to 24dB of
+                                gain. If this parameter is enabled, it is the
+                                responsibility of the user to ensure that
+                                the Digital volume control is set to a value
+                                that does not result in clipping/distortion!)
+
+
 Name:   at86rf233
 Info:   Configures the Atmel AT86RF233 802.15.4 low-power WPAN transceiver,
         connected to spi0.0
@@ -231,6 +273,15 @@ Load:   dtoverlay=audioinjector-wm8731-audio
 Params: <None>
 
 
+Name:   audremap
+Info:   Switches PWM sound output to pins 12 (Right) & 13 (Left)
+Load:   dtoverlay=audremap,<param>=<val>
+Params: swap_lr                 Reverse the channel allocation, which will also
+                                swap the audio jack outputs (default off)
+        enable_jack             Don't switch off the audio jack output
+                                (default off)
+
+
 Name:   bmp085_i2c-sensor
 Info:   Configures the BMP085/BMP180 digital barometric pressure and temperature
         sensors from Bosch Sensortec
@@ -244,6 +295,20 @@ Info:   Overlay for the DHT11/DHT21/DHT22 humidity/temperature sensors
 Load:   dtoverlay=dht11,<param>=<val>
 Params: gpiopin                 GPIO connected to the sensor's DATA output.
                                 (default 4)
+
+
+Name:   dionaudio-loco
+Info:   Configures the Dion Audio LOCO DAC-AMP
+Load:   dtoverlay=dionaudio-loco
+Params: <None>
+
+
+Name:   dpi18
+Info:   Overlay for a generic 18-bit DPI display
+        This uses GPIOs 0-21 (so no I2C, uart etc.), and activates the output
+        2-3 seconds after the kernel has started.
+Load:   dtoverlay=dpi18
+Params: <None>
 
 
 Name:   dpi24
@@ -303,7 +368,7 @@ Params: gpio_pin                Input pin number. Default is 18.
 
 
 Name:   gpio-poweroff
-Info:   Drives a GPIO high or low on reboot
+Info:   Drives a GPIO high or low on poweroff (including halt)
 Load:   dtoverlay=gpio-poweroff,<param>=<val>
 Params: gpiopin                 GPIO for signalling (default 26)
 
@@ -482,12 +547,6 @@ Load:   dtoverlay=i2s-gpio28-31
 Params: <None>
 
 
-Name:   i2s-mmap
-Info:   Enables mmap support in the bcm2708-i2s driver
-Load:   dtoverlay=i2s-mmap
-Params: <None>
-
-
 Name:   iqaudio-dac
 Info:   Configures the IQaudio DAC audio card
 Load:   dtoverlay=iqaudio-dac,<param>
@@ -524,6 +583,10 @@ Params: 24db_digital_gain       Allow gain to be applied via the PCM512x codec
                                 responsibility of the user to ensure that
                                 the Digital volume control is set to a value
                                 that does not result in clipping/distortion!)
+        auto_mute_amp           If specified, unmute/mute the IQaudIO amp when
+                                starting/stopping audio playback.
+        unmute_amp              If specified, unmute the IQaudIO amp once when
+                                the DAC driver module loads.
 
 
 Name:   iqaudio-digi-wm8804-audio
@@ -588,12 +651,36 @@ Params: gpio_out_pin            GPIO for output (default "17")
 
 
 Name:   mcp23017
-Info:   Configures the MCP23017 I2C port expander
+Info:   Configures the MCP23017 I2C GPIO expander
 Load:   dtoverlay=mcp23017,<param>=<val>
 Params: gpiopin                 Gpio pin connected to the INTA output of the
                                 MCP23017 (default: 4)
 
         addr                    I2C address of the MCP23017 (default: 0x20)
+
+
+Name:   mcp23s17
+Info:   Configures the MCP23S08/17 SPI GPIO expanders.
+        If devices are present on SPI1 or SPI2, those interfaces must be enabled
+        with one of the spi1-1/2/3cs and/or spi2-1/2/3cs overlays.
+        If interrupts are enabled for a device on a given CS# on a SPI bus, that
+        device must be the only one present on that SPI bus/CS#.
+Load:   dtoverlay=mcp23s17,<param>=<val>
+Params: s08-spi<n>-<m>-present  4-bit integer, bitmap indicating MCP23S08
+                                devices present on SPI<n>, CS#<m>
+
+        s17-spi<n>-<m>-present  8-bit integer, bitmap indicating MCP23S17
+                                devices present on SPI<n>, CS#<m>
+
+        s08-spi<n>-<m>-int-gpio integer, enables interrupts on a single
+                                MCP23S08 device on SPI<n>, CS#<m>, specifies
+                                the GPIO pin to which INT output of MCP23S08
+                                is connected.
+
+        s17-spi<n>-<m>-int-gpio integer, enables mirrored interrupts on a
+                                single MCP23S17 device on SPI<n>, CS#<m>,
+                                specifies the GPIO pin to which either INTA
+                                or INTB output of MCP23S17 is connected.
 
 
 Name:   mcp2515-can0
@@ -715,6 +802,12 @@ Params: speed                   Display SPI bus speed
         xohms                   Touchpanel sensitivity (X-plate resistance)
 
 
+Name:   pisound
+Info:   Configures the Blokas Labs pisound card
+Load:   dtoverlay=pisound
+Params: <None>
+
+
 Name:   pitft22
 Info:   Adafruit PiTFT 2.2" screen
 Load:   dtoverlay=pitft22,<param>=<val>
@@ -761,10 +854,24 @@ Params: speed                   Display SPI bus speed
         debug                   Debug output level {0-7}
 
 
+Name:   pitft35-resistive
+Info:   Adafruit PiTFT 3.5" resistive touch screen
+Load:   dtoverlay=pitft35-resistive,<param>=<val>
+Params: speed                   Display SPI bus speed
+
+        rotate                  Display rotation {0,90,180,270}
+
+        fps                     Delay between frame updates
+
+        debug                   Debug output level {0-7}
+
+
 Name:   pps-gpio
 Info:   Configures the pps-gpio (pulse-per-second time signal via GPIO).
 Load:   dtoverlay=pps-gpio,<param>=<val>
 Params: gpiopin                 Input GPIO (default "18")
+        assert_falling_edge     When present, assert is indicated by a falling
+                                edge, rather than by a rising edge
 
 
 Name:   pwm
@@ -866,6 +973,16 @@ Name:   rra-digidac1-wm8741-audio
 Info:   Configures the Red Rocks Audio DigiDAC1 soundcard
 Load:   dtoverlay=rra-digidac1-wm8741-audio
 Params: <None>
+
+
+Name:   sc16is750-i2c
+Info:   Overlay for the NXP SC16IS750 UART with I2C Interface
+        Enables the chip on I2C1 at 0x48. To select another address,
+        please refer to table 10 in reference manual.
+
+Load:   dtoverlay=sc16is750-i2c,<param>=<val>
+Params: int_pin                 GPIO used for IRQ (default 24)
+        addr                    Address (default 0x48)
 
 
 Name:   sc16is752-spi1
