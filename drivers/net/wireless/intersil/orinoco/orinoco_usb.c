@@ -697,7 +697,7 @@ static void ezusb_req_ctx_wait(struct ezusb_priv *upriv,
 			while (!ctx->done.done && msecs--)
 				udelay(1000);
 		} else {
-			swait_event_interruptible(ctx->done.wait,
+			wait_event_interruptible(ctx->done.wait,
 						 ctx->done.done);
 		}
 		break;
@@ -1275,7 +1275,7 @@ static netdev_tx_t ezusb_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto busy;
 	}
 
-	dev->trans_start = jiffies;
+	netif_trans_update(dev);
 	stats->tx_bytes += skb->len;
 	goto ok;
 

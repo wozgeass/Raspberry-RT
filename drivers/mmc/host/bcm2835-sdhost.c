@@ -235,10 +235,10 @@ static void __iomem *timer_base;
 #define LOG_ENTRIES (256*1)
 #define LOG_SIZE (sizeof(LOG_ENTRY_T)*LOG_ENTRIES)
 
-static void log_init(u32 bus_to_phys)
+static void log_init(struct device *dev, u32 bus_to_phys)
 {
 	spin_lock_init(&log_lock);
-	sdhost_log_buf = dma_zalloc_coherent(NULL, LOG_SIZE, &sdhost_log_addr,
+	sdhost_log_buf = dma_zalloc_coherent(dev, LOG_SIZE, &sdhost_log_addr,
 					     GFP_KERNEL);
 	if (sdhost_log_buf) {
 		pr_info("sdhost: log_buf @ %p (%x)\n",
@@ -373,7 +373,7 @@ static void bcm2835_sdhost_dumpregs(struct bcm2835_host *host)
 	pr_info("%s: SDRSP2 0x%08x\n",
 		mmc_hostname(host->mmc),
 		bcm2835_sdhost_read(host, SDRSP2));
-	pr_err("%s: SDRSP3 0x%08x\n",
+	pr_info("%s: SDRSP3 0x%08x\n",
 		mmc_hostname(host->mmc),
 		bcm2835_sdhost_read(host, SDRSP3));
 	pr_info("%s: SDHSTS 0x%08x\n",
@@ -815,7 +815,7 @@ static void bcm2835_sdhost_prepare_dma(struct bcm2835_host *host,
 			if (sg_is_last(sg)) {
 				BUG_ON(sg->length < len);
 				sg->length -= len;
-				host->drain_page = (struct page *)sg->page_link;
+				host->drain_page = sg_page(sg);
 				host->drain_offset = sg->offset + sg->length;
 			}
 		}
@@ -1183,9 +1183,8 @@ static void bcm2835_sdhost_finish_command(struct bcm2835_host *host,
 		retries = 1; // We've already waited long enough this time
 	}
 
-	retries = host->cmd_quick_poll_retries;
 	for (sdcmd = bcm2835_sdhost_read(host, SDCMD);
-	     (sdcmd & SDCMD_NEW_FLAG) && !(sdcmd & SDCMD_FAIL_FLAG) && retries;
+	     (sdcmd & SDCMD_NEW_FLAG) && retries;
 	     retries--) {
 		cpu_relax();
 		sdcmd = bcm2835_sdhost_read(host, SDCMD);
@@ -1208,8 +1207,7 @@ static void bcm2835_sdhost_finish_command(struct bcm2835_host *host,
 			usleep_range(1, 10);
 			spin_lock_irqsave(&host->lock, *irq_flags);
 			sdcmd = bcm2835_sdhost_read(host, SDCMD);
-			if (!(sdcmd & SDCMD_NEW_FLAG) ||
-			    (sdcmd & SDCMD_FAIL_FLAG))
+			if (!(sdcmd & SDCMD_NEW_FLAG))
 				break;
 		}
 	}
@@ -1892,8 +1890,6 @@ int bcm2835_sdhost_add_host(struct bcm2835_host *host)
 
 	mmc = host->mmc;
 
-	bcm2835_sdhost_reset_internal(host);
-
 	mmc->f_max = host->max_clk;
 	mmc->f_min = host->max_clk / SDCDIV_MAX_CDIV;
 
@@ -2041,7 +2037,6 @@ static int bcm2835_sdhost_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 	host->bus_addr = be32_to_cpup(addr);
-	log_init(iomem->start - host->bus_addr);
 	pr_debug(" - ioaddr %lx, iomem->start %lx, bus_addr %lx\n",
 		 (unsigned long)host->ioaddr,
 		 (unsigned long)iomem->start,
@@ -2093,8 +2088,11 @@ static int bcm2835_sdhost_probe(struct platform_device *pdev)
 
 	clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(clk)) {
-		dev_err(dev, "could not get clk\n");
 		ret = PTR_ERR(clk);
+		if (ret == -EPROBE_DEFER)
+			dev_info(dev, "could not get clk, deferring probe\n");
+		else
+			dev_err(dev, "could not get clk\n");
 		goto err;
 	}
 
@@ -2110,6 +2108,8 @@ static int bcm2835_sdhost_probe(struct platform_device *pdev)
 	pr_debug(" - max_clk %lx, irq %d\n",
 		 (unsigned long)host->max_clk,
 		 (int)host->irq);
+
+	log_init(dev, iomem->start - host->bus_addr);
 
 	if (node)
 		mmc_of_parse(mmc);

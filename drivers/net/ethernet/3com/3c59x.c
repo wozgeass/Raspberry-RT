@@ -842,9 +842,9 @@ static void poll_vortex(struct net_device *dev)
 {
 	struct vortex_private *vp = netdev_priv(dev);
 	unsigned long flags;
-	local_irq_save_nort(flags);
+	local_irq_save(flags);
 	(vp->full_bus_master_rx ? boomerang_interrupt:vortex_interrupt)(dev->irq,dev);
-	local_irq_restore_nort(flags);
+	local_irq_restore(flags);
 }
 #endif
 
@@ -1910,12 +1910,12 @@ static void vortex_tx_timeout(struct net_device *dev)
 			 * Block interrupts because vortex_interrupt does a bare spin_lock()
 			 */
 			unsigned long flags;
-			local_irq_save_nort(flags);
+			local_irq_save(flags);
 			if (vp->full_bus_master_tx)
 				boomerang_interrupt(dev->irq, dev);
 			else
 				vortex_interrupt(dev->irq, dev);
-			local_irq_restore_nort(flags);
+			local_irq_restore(flags);
 		}
 	}
 
@@ -1944,7 +1944,7 @@ static void vortex_tx_timeout(struct net_device *dev)
 	}
 	/* Issue Tx Enable */
 	iowrite16(TxEnable, ioaddr + EL3_CMD);
-	dev->trans_start = jiffies; /* prevent tx timeout */
+	netif_trans_update(dev); /* prevent tx timeout */
 }
 
 /*

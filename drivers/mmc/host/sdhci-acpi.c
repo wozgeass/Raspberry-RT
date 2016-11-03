@@ -43,6 +43,7 @@
 
 #ifdef CONFIG_X86
 #include <asm/cpu_device_id.h>
+#include <asm/intel-family.h>
 #include <asm/iosf_mbi.h>
 #endif
 
@@ -126,7 +127,7 @@ static const struct sdhci_acpi_chip sdhci_acpi_chip_int = {
 static bool sdhci_acpi_byt(void)
 {
 	static const struct x86_cpu_id byt[] = {
-		{ X86_VENDOR_INTEL, 6, 0x37 },
+		{ X86_VENDOR_INTEL, 6, INTEL_FAM6_ATOM_SILVERMONT1 },
 		{}
 	};
 
@@ -200,8 +201,6 @@ static int bxt_get_cd(struct mmc_host *mmc)
 	if (!gpio_cd)
 		return 0;
 
-	pm_runtime_get_sync(mmc->parent);
-
 	spin_lock_irqsave(&host->lock, flags);
 
 	if (host->flags & SDHCI_DEVICE_DEAD)
@@ -210,9 +209,6 @@ static int bxt_get_cd(struct mmc_host *mmc)
 	ret = !!(sdhci_readl(host, SDHCI_PRESENT_STATE) & SDHCI_CARD_PRESENT);
 out:
 	spin_unlock_irqrestore(&host->lock, flags);
-
-	pm_runtime_mark_last_busy(mmc->parent);
-	pm_runtime_put_autosuspend(mmc->parent);
 
 	return ret;
 }
@@ -267,8 +263,10 @@ static int sdhci_acpi_sd_probe_slot(struct platform_device *pdev,
 
 	/* Platform specific code during sd probe slot goes here */
 
-	if (hid && !strcmp(hid, "80865ACA"))
+	if (hid && !strcmp(hid, "80865ACA")) {
 		host->mmc_host_ops.get_cd = bxt_get_cd;
+		host->mmc->caps |= MMC_CAP_AGGRESSIVE_PM;
+	}
 
 	return 0;
 }
@@ -534,11 +532,6 @@ static int sdhci_acpi_resume(struct device *dev)
 	return sdhci_resume_host(c->host);
 }
 
-#else
-
-#define sdhci_acpi_suspend	NULL
-#define sdhci_acpi_resume	NULL
-
 #endif
 
 #ifdef CONFIG_PM
@@ -562,8 +555,7 @@ static int sdhci_acpi_runtime_resume(struct device *dev)
 #endif
 
 static const struct dev_pm_ops sdhci_acpi_pm_ops = {
-	.suspend		= sdhci_acpi_suspend,
-	.resume			= sdhci_acpi_resume,
+	SET_SYSTEM_SLEEP_PM_OPS(sdhci_acpi_suspend, sdhci_acpi_resume)
 	SET_RUNTIME_PM_OPS(sdhci_acpi_runtime_suspend,
 			sdhci_acpi_runtime_resume, NULL)
 };

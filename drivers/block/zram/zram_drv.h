@@ -15,8 +15,9 @@
 #ifndef _ZRAM_DRV_H_
 #define _ZRAM_DRV_H_
 
-#include <linux/spinlock.h>
+#include <linux/rwsem.h>
 #include <linux/zsmalloc.h>
+#include <linux/crypto.h>
 
 #include "zcomp.h"
 
@@ -72,9 +73,6 @@ enum zram_pageflags {
 struct zram_table_entry {
 	unsigned long handle;
 	unsigned long value;
-#ifdef CONFIG_PREEMPT_RT_BASE
-	spinlock_t lock;
-#endif
 };
 
 struct zram_stats {
@@ -88,6 +86,7 @@ struct zram_stats {
 	atomic64_t zero_pages;		/* no. of zero filled pages */
 	atomic64_t pages_stored;	/* no. of pages currently stored */
 	atomic_long_t max_used_pages;	/* no. of maximum pages stored */
+	atomic64_t writestall;		/* no. of write slow paths */
 };
 
 struct zram_meta {
@@ -105,7 +104,6 @@ struct zram {
 	 * the number of pages zram can consume for storing compressed data
 	 */
 	unsigned long limit_pages;
-	int max_comp_streams;
 
 	struct zram_stats stats;
 	atomic_t refcount; /* refcount for zram_meta */
@@ -116,48 +114,10 @@ struct zram {
 	 * we can store in a disk.
 	 */
 	u64 disksize;	/* bytes */
-	char compressor[10];
+	char compressor[CRYPTO_MAX_ALG_NAME];
 	/*
 	 * zram is claimed so open request will be failed
 	 */
 	bool claim; /* Protected by bdev->bd_mutex */
 };
-
-#ifndef CONFIG_PREEMPT_RT_BASE
-static inline void zram_lock_table(struct zram_table_entry *table)
-{
-	bit_spin_lock(ZRAM_ACCESS, &table->value);
-}
-
-static inline void zram_unlock_table(struct zram_table_entry *table)
-{
-	bit_spin_unlock(ZRAM_ACCESS, &table->value);
-}
-
-static inline void zram_meta_init_table_locks(struct zram_meta *meta, u64 disksize) { }
-#else /* CONFIG_PREEMPT_RT_BASE */
-static inline void zram_lock_table(struct zram_table_entry *table)
-{
-	spin_lock(&table->lock);
-	__set_bit(ZRAM_ACCESS, &table->value);
-}
-
-static inline void zram_unlock_table(struct zram_table_entry *table)
-{
-	__clear_bit(ZRAM_ACCESS, &table->value);
-	spin_unlock(&table->lock);
-}
-
-static inline void zram_meta_init_table_locks(struct zram_meta *meta, u64 disksize)
-{
-        size_t num_pages = disksize >> PAGE_SHIFT;
-        size_t index;
-
-        for (index = 0; index < num_pages; index++) {
-		spinlock_t *lock = &meta->table[index].lock;
-		spin_lock_init(lock);
-        }
-}
-#endif /* CONFIG_PREEMPT_RT_BASE */
-
 #endif

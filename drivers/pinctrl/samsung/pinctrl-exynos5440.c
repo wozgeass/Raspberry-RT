@@ -789,7 +789,7 @@ static int exynos5440_pinctrl_register(struct platform_device *pdev,
 	if (ret)
 		return ret;
 
-	pctl_dev = pinctrl_register(ctrldesc, &pdev->dev, priv);
+	pctl_dev = devm_pinctrl_register(&pdev->dev, ctrldesc, priv);
 	if (IS_ERR(pctl_dev)) {
 		dev_err(&pdev->dev, "could not register pinctrl driver\n");
 		return PTR_ERR(pctl_dev);
@@ -998,6 +998,7 @@ static struct platform_driver exynos5440_pinctrl_driver = {
 	.driver = {
 		.name	= "exynos5440-pinctrl",
 		.of_match_table = exynos5440_pinctrl_dt_match,
+		.suppress_bind_attrs = true,
 	},
 };
 

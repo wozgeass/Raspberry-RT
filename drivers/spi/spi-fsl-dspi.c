@@ -121,18 +121,22 @@ enum dspi_trans_mode {
 
 struct fsl_dspi_devtype_data {
 	enum dspi_trans_mode trans_mode;
+	u8 max_clock_factor;
 };
 
 static const struct fsl_dspi_devtype_data vf610_data = {
 	.trans_mode = DSPI_EOQ_MODE,
+	.max_clock_factor = 2,
 };
 
 static const struct fsl_dspi_devtype_data ls1021a_v1_data = {
 	.trans_mode = DSPI_TCFQ_MODE,
+	.max_clock_factor = 8,
 };
 
 static const struct fsl_dspi_devtype_data ls2085a_data = {
 	.trans_mode = DSPI_TCFQ_MODE,
+	.max_clock_factor = 8,
 };
 
 struct fsl_dspi {
@@ -726,6 +730,9 @@ static int dspi_probe(struct platform_device *pdev)
 	}
 	clk_prepare_enable(dspi->clk);
 
+	master->max_speed_hz =
+		clk_get_rate(dspi->clk) / dspi->devtype_data->max_clock_factor;
+
 	init_waitqueue_head(&dspi->waitq);
 	platform_set_drvdata(pdev, master);
 
@@ -753,7 +760,6 @@ static int dspi_remove(struct platform_device *pdev)
 	/* Disconnect from the SPI framework */
 	clk_disable_unprepare(dspi->clk);
 	spi_unregister_master(dspi->master);
-	spi_master_put(dspi->master);
 
 	return 0;
 }
