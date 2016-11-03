@@ -31,7 +31,7 @@
 #include <trace/events/timer.h>
 
 /*
- * Per cpu nohz control structure
+ * Per-CPU nohz control structure
  */
 static DEFINE_PER_CPU(struct tick_sched, tick_cpu_sched);
 
@@ -61,9 +61,8 @@ static void tick_do_update_jiffies64(ktime_t now)
 	if (delta.tv64 < tick_period.tv64)
 		return;
 
-	/* Reevalute with jiffies_lock held */
-	raw_spin_lock(&jiffies_lock);
-	write_seqcount_begin(&jiffies_seq);
+	/* Reevaluate with jiffies_lock held */
+	write_seqlock(&jiffies_lock);
 
 	delta = ktime_sub(now, last_jiffies_update);
 	if (delta.tv64 >= tick_period.tv64) {
@@ -86,12 +85,10 @@ static void tick_do_update_jiffies64(ktime_t now)
 		/* Keep the tick_next_period variable up to date */
 		tick_next_period = ktime_add(last_jiffies_update, tick_period);
 	} else {
-		write_seqcount_end(&jiffies_seq);
-		raw_spin_unlock(&jiffies_lock);
+		write_sequnlock(&jiffies_lock);
 		return;
 	}
-	write_seqcount_end(&jiffies_seq);
-	raw_spin_unlock(&jiffies_lock);
+	write_sequnlock(&jiffies_lock);
 	update_wall_time();
 }
 
@@ -102,14 +99,12 @@ static ktime_t tick_init_jiffy_update(void)
 {
 	ktime_t period;
 
-	raw_spin_lock(&jiffies_lock);
-	write_seqcount_begin(&jiffies_seq);
+	write_seqlock(&jiffies_lock);
 	/* Did we start the jiffies update yet ? */
 	if (last_jiffies_update.tv64 == 0)
 		last_jiffies_update = tick_next_period;
 	period = last_jiffies_update;
-	write_seqcount_end(&jiffies_seq);
-	raw_spin_unlock(&jiffies_lock);
+	write_sequnlock(&jiffies_lock);
 	return period;
 }
 
@@ -121,8 +116,8 @@ static void tick_sched_do_timer(ktime_t now)
 #ifdef CONFIG_NO_HZ_COMMON
 	/*
 	 * Check if the do_timer duty was dropped. We don't care about
-	 * concurrency: This happens only when the cpu in charge went
-	 * into a long sleep. If two cpus happen to assign themself to
+	 * concurrency: This happens only when the CPU in charge went
+	 * into a long sleep. If two CPUs happen to assign themselves to
 	 * this duty, then the jiffies update is still serialized by
 	 * jiffies_lock.
 	 */
@@ -217,7 +212,6 @@ static void nohz_full_kick_func(struct irq_work *work)
 
 static DEFINE_PER_CPU(struct irq_work, nohz_full_kick_work) = {
 	.func = nohz_full_kick_func,
-	.flags = IRQ_WORK_HARD_IRQ,
 };
 
 /*
@@ -268,7 +262,7 @@ static void tick_nohz_dep_set_all(atomic_t *dep,
 {
 	int prev;
 
-	prev = atomic_fetch_or(dep, BIT(bit));
+	prev = atomic_fetch_or(BIT(bit), dep);
 	if (!prev)
 		tick_nohz_full_kick_all();
 }
@@ -298,7 +292,7 @@ void tick_nohz_dep_set_cpu(int cpu, enum tick_dep_bits bit)
 
 	ts = per_cpu_ptr(&tick_cpu_sched, cpu);
 
-	prev = atomic_fetch_or(&ts->tick_dep_mask, BIT(bit));
+	prev = atomic_fetch_or(BIT(bit), &ts->tick_dep_mask);
 	if (!prev) {
 		preempt_disable();
 		/* Perf needs local kick that is NMI safe */
@@ -355,7 +349,7 @@ void tick_nohz_dep_clear_signal(struct signal_struct *sig, enum tick_dep_bits bi
 /*
  * Re-evaluate the need for the tick as we switch the current task.
  * It might need the tick due to per task/process properties:
- * perf events, posix cpu timers, ...
+ * perf events, posix CPU timers, ...
  */
 void __tick_nohz_task_switch(void)
 {
@@ -515,8 +509,8 @@ int tick_nohz_tick_stopped(void)
  *
  * In case the sched_tick was stopped on this CPU, we have to check if jiffies
  * must be updated. Otherwise an interrupt handler could use a stale jiffy
- * value. We do this unconditionally on any cpu, as we don't know whether the
- * cpu, which has the update task assigned is in a long sleep.
+ * value. We do this unconditionally on any CPU, as we don't know whether the
+ * CPU, which has the update task assigned is in a long sleep.
  */
 static void tick_nohz_update_jiffies(ktime_t now)
 {
@@ -532,7 +526,7 @@ static void tick_nohz_update_jiffies(ktime_t now)
 }
 
 /*
- * Updates the per cpu time idle statistics counters
+ * Updates the per-CPU time idle statistics counters
  */
 static void
 update_ts_time_stats(int cpu, struct tick_sched *ts, ktime_t now, u64 *last_update_time)
@@ -572,12 +566,12 @@ static ktime_t tick_nohz_start_idle(struct tick_sched *ts)
 }
 
 /**
- * get_cpu_idle_time_us - get the total idle time of a cpu
+ * get_cpu_idle_time_us - get the total idle time of a CPU
  * @cpu: CPU number to query
  * @last_update_time: variable to store update time in. Do not update
  * counters if NULL.
  *
- * Return the cummulative idle time (since boot) for a given
+ * Return the cumulative idle time (since boot) for a given
  * CPU, in microseconds.
  *
  * This time is measured via accounting rather than sampling,
@@ -613,12 +607,12 @@ u64 get_cpu_idle_time_us(int cpu, u64 *last_update_time)
 EXPORT_SYMBOL_GPL(get_cpu_idle_time_us);
 
 /**
- * get_cpu_iowait_time_us - get the total iowait time of a cpu
+ * get_cpu_iowait_time_us - get the total iowait time of a CPU
  * @cpu: CPU number to query
  * @last_update_time: variable to store update time in. Do not update
  * counters if NULL.
  *
- * Return the cummulative iowait time (since boot) for a given
+ * Return the cumulative iowait time (since boot) for a given
  * CPU, in microseconds.
  *
  * This time is measured via accounting rather than sampling,
@@ -676,10 +670,10 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 
 	/* Read jiffies and the time when jiffies were updated last */
 	do {
-		seq = read_seqcount_begin(&jiffies_seq);
+		seq = read_seqbegin(&jiffies_lock);
 		basemono = last_jiffies_update.tv64;
 		basejiff = jiffies;
-	} while (read_seqcount_retry(&jiffies_seq, seq));
+	} while (read_seqretry(&jiffies_lock, seq));
 	ts->last_jiffies = basejiff;
 
 	if (rcu_needs_cpu(basemono, &next_rcu) ||
@@ -709,7 +703,7 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 
 		/*
 		 * Tell the timer code that the base is not idle, i.e. undo
-		 * the effect of get_next_timer_interrupt().
+		 * the effect of get_next_timer_interrupt():
 		 */
 		timer_clear_idle();
 		/*
@@ -738,14 +732,14 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 	}
 
 	/*
-	 * If this cpu is the one which updates jiffies, then give up
-	 * the assignment and let it be taken by the cpu which runs
-	 * the tick timer next, which might be this cpu as well. If we
+	 * If this CPU is the one which updates jiffies, then give up
+	 * the assignment and let it be taken by the CPU which runs
+	 * the tick timer next, which might be this CPU as well. If we
 	 * don't drop this here the jiffies might be stale and
 	 * do_timer() never invoked. Keep track of the fact that it
-	 * was the one which had the do_timer() duty last. If this cpu
+	 * was the one which had the do_timer() duty last. If this CPU
 	 * is the one which had the do_timer() duty last, we limit the
-	 * sleep time to the timekeeping max_deferement value.
+	 * sleep time to the timekeeping max_deferment value.
 	 * Otherwise we can sleep as long as we want.
 	 */
 	delta = timekeeping_max_deferment();
@@ -788,6 +782,7 @@ static ktime_t tick_nohz_stop_sched_tick(struct tick_sched *ts,
 	if (!ts->tick_stopped) {
 		nohz_balance_enter_idle(cpu);
 		calc_load_enter_idle();
+		cpu_load_update_nohz_start();
 
 		ts->last_tick = hrtimer_get_expires(&ts->sched_timer);
 		ts->tick_stopped = 1;
@@ -814,15 +809,15 @@ out:
 	return tick;
 }
 
-static void tick_nohz_restart_sched_tick(struct tick_sched *ts, ktime_t now, int active)
+static void tick_nohz_restart_sched_tick(struct tick_sched *ts, ktime_t now)
 {
 	/* Update jiffies first */
 	tick_do_update_jiffies64(now);
-	update_cpu_load_nohz(active);
+	cpu_load_update_nohz_stop();
 
 	/*
 	 * Clear the timer idle flag, so we avoid IPIs on remote queueing and
-	 * the clock forward checks in the enqueue path.
+	 * the clock forward checks in the enqueue path:
 	 */
 	timer_clear_idle();
 
@@ -851,16 +846,16 @@ static void tick_nohz_full_update_tick(struct tick_sched *ts)
 	if (can_stop_full_tick(ts))
 		tick_nohz_stop_sched_tick(ts, ktime_get(), cpu);
 	else if (ts->tick_stopped)
-		tick_nohz_restart_sched_tick(ts, ktime_get(), 1);
+		tick_nohz_restart_sched_tick(ts, ktime_get());
 #endif
 }
 
 static bool can_stop_idle_tick(int cpu, struct tick_sched *ts)
 {
 	/*
-	 * If this cpu is offline and it is the one which updates
+	 * If this CPU is offline and it is the one which updates
 	 * jiffies, then give up the assignment and let it be taken by
-	 * the cpu which runs the tick timer next. If we don't drop
+	 * the CPU which runs the tick timer next. If we don't drop
 	 * this here the jiffies might be stale and do_timer() never
 	 * invoked.
 	 */
@@ -879,7 +874,14 @@ static bool can_stop_idle_tick(int cpu, struct tick_sched *ts)
 		return false;
 
 	if (unlikely(local_softirq_pending() && cpu_online(cpu))) {
-		softirq_check_pending_idle();
+		static int ratelimit;
+
+		if (ratelimit < 10 &&
+		    (local_softirq_pending() & SOFTIRQ_STOP_IDLE_MASK)) {
+			pr_warn("NOHZ: local_softirq_pending %02x\n",
+				(unsigned int) local_softirq_pending());
+			ratelimit++;
+		}
 		return false;
 	}
 
@@ -943,11 +945,11 @@ void tick_nohz_idle_enter(void)
 	WARN_ON_ONCE(irqs_disabled());
 
 	/*
- 	 * Update the idle state in the scheduler domain hierarchy
- 	 * when tick_nohz_stop_sched_tick() is called from the idle loop.
- 	 * State will be updated to busy during the first busy tick after
- 	 * exiting idle.
- 	 */
+	 * Update the idle state in the scheduler domain hierarchy
+	 * when tick_nohz_stop_sched_tick() is called from the idle loop.
+	 * State will be updated to busy during the first busy tick after
+	 * exiting idle.
+	 */
 	set_cpu_sd_state_idle();
 
 	local_irq_disable();
@@ -1035,7 +1037,7 @@ void tick_nohz_idle_exit(void)
 		tick_nohz_stop_idle(ts, now);
 
 	if (ts->tick_stopped) {
-		tick_nohz_restart_sched_tick(ts, now, 0);
+		tick_nohz_restart_sched_tick(ts, now);
 		tick_nohz_account_idle_ticks(ts);
 	}
 
@@ -1188,10 +1190,9 @@ void tick_setup_sched_timer(void)
 	 * Emulate tick processing via per-CPU hrtimers:
 	 */
 	hrtimer_init(&ts->sched_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
-	ts->sched_timer.irqsafe = 1;
 	ts->sched_timer.function = tick_sched_timer;
 
-	/* Get the next period (per cpu) */
+	/* Get the next period (per-CPU) */
 	hrtimer_set_expires(&ts->sched_timer, tick_init_jiffy_update());
 
 	/* Offset the tick to avert jiffies_lock contention. */

@@ -591,10 +591,10 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 						     struct sched_dl_entity,
 						     dl_timer);
 	struct task_struct *p = dl_task_of(dl_se);
-	unsigned long flags;
+	struct rq_flags rf;
 	struct rq *rq;
 
-	rq = task_rq_lock(p, &flags);
+	rq = task_rq_lock(p, &rf);
 
 	/*
 	 * The task might have changed its scheduling policy to something
@@ -658,8 +658,11 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 	 *
 	 * XXX figure out if select_task_rq_dl() deals with offline cpus.
 	 */
-	if (unlikely(!rq->online))
+	if (unlikely(!rq->online)) {
+		lockdep_unpin_lock(&rq->lock, rf.cookie);
 		rq = dl_task_offline_migration(rq, p);
+		rf.cookie = lockdep_pin_lock(&rq->lock);
+	}
 
 	/*
 	 * Queueing this task back might have overloaded rq, check if we need
@@ -670,14 +673,14 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 		 * Nothing relies on rq->lock after this, so its safe to drop
 		 * rq->lock.
 		 */
-		lockdep_unpin_lock(&rq->lock);
+		lockdep_unpin_lock(&rq->lock, rf.cookie);
 		push_dl_task(rq);
-		lockdep_pin_lock(&rq->lock);
+		lockdep_repin_lock(&rq->lock, rf.cookie);
 	}
 #endif
 
 unlock:
-	task_rq_unlock(rq, p, &flags);
+	task_rq_unlock(rq, p, &rf);
 
 	/*
 	 * This can free the task_struct, including this hrtimer, do not touch
@@ -694,7 +697,6 @@ void init_dl_task_timer(struct sched_dl_entity *dl_se)
 
 	hrtimer_init(timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	timer->function = dl_task_timer;
-	timer->irqsafe = 1;
 }
 
 static
@@ -718,10 +720,6 @@ static void update_curr_dl(struct rq *rq)
 	if (!dl_task(curr) || !on_dl_rq(dl_se))
 		return;
 
-	/* Kick cpufreq (see the comment in linux/cpufreq.h). */
-	if (cpu_of(rq) == smp_processor_id())
-		cpufreq_trigger_update(rq_clock(rq));
-
 	/*
 	 * Consumed budget is computed considering the time as
 	 * observed by schedulable tasks (excluding time spent
@@ -736,6 +734,10 @@ static void update_curr_dl(struct rq *rq)
 			goto throttle;
 		return;
 	}
+
+	/* kick cpufreq (see the comment in linux/cpufreq.h). */
+	if (cpu_of(rq) == smp_processor_id())
+		cpufreq_trigger_update(rq_clock(rq));
 
 	schedstat_set(curr->se.statistics.exec_max,
 		      max(curr->se.statistics.exec_max, delta_exec));
@@ -1126,7 +1128,8 @@ static struct sched_dl_entity *pick_next_dl_entity(struct rq *rq,
 	return rb_entry(left, struct sched_dl_entity, rb_node);
 }
 
-struct task_struct *pick_next_task_dl(struct rq *rq, struct task_struct *prev)
+struct task_struct *
+pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie cookie)
 {
 	struct sched_dl_entity *dl_se;
 	struct task_struct *p;
@@ -1141,9 +1144,9 @@ struct task_struct *pick_next_task_dl(struct rq *rq, struct task_struct *prev)
 		 * disabled avoiding further scheduler activity on it and we're
 		 * being very careful to re-start the picking loop.
 		 */
-		lockdep_unpin_lock(&rq->lock);
+		lockdep_unpin_lock(&rq->lock, cookie);
 		pull_dl_task(rq);
-		lockdep_pin_lock(&rq->lock);
+		lockdep_repin_lock(&rq->lock, cookie);
 		/*
 		 * pull_rt_task() can drop (and re-acquire) rq->lock; this
 		 * means a stop task can slip in, in which case we need to
@@ -1393,7 +1396,7 @@ static struct rq *find_lock_later_rq(struct task_struct *task, struct rq *rq)
 		if (double_lock_balance(rq, later_rq)) {
 			if (unlikely(task_rq(task) != rq ||
 				     !cpumask_test_cpu(later_rq->cpu,
-				                       tsk_cpus_allowed(task)) ||
+						       tsk_cpus_allowed(task)) ||
 				     task_running(rq, task) ||
 				     !dl_task(task) ||
 				     !task_on_rq_queued(task))) {

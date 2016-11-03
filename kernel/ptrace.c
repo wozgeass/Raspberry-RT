@@ -128,14 +128,7 @@ static bool ptrace_freeze_traced(struct task_struct *task)
 
 	spin_lock_irq(&task->sighand->siglock);
 	if (task_is_traced(task) && !__fatal_signal_pending(task)) {
-		unsigned long flags;
-
-		raw_spin_lock_irqsave(&task->pi_lock, flags);
-		if (task->state & __TASK_TRACED)
-			task->state = __TASK_TRACED;
-		else
-			task->saved_state = __TASK_TRACED;
-		raw_spin_unlock_irqrestore(&task->pi_lock, flags);
+		task->state = __TASK_TRACED;
 		ret = true;
 	}
 	spin_unlock_irq(&task->sighand->siglock);
@@ -592,8 +585,8 @@ static int ptrace_setoptions(struct task_struct *child, unsigned long data)
 		return -EINVAL;
 
 	if (unlikely(data & PTRACE_O_SUSPEND_SECCOMP)) {
-		if (!config_enabled(CONFIG_CHECKPOINT_RESTORE) ||
-		    !config_enabled(CONFIG_SECCOMP))
+		if (!IS_ENABLED(CONFIG_CHECKPOINT_RESTORE) ||
+		    !IS_ENABLED(CONFIG_SECCOMP))
 			return -EINVAL;
 
 		if (!capable(CAP_SYS_ADMIN))
